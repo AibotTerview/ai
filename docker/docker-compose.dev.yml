@@ -1,0 +1,22 @@
+services:
+  django:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: boterview-ai
+    command: python manage.py runserver 0.0.0.0:8000
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    environment:
+      APP_PROFILE: dev
+      DB_NAME: boterview
+    restart: unless-stopped
+    networks:
+      - boterview-net
+
+networks:
+  boterview-net:
+    external: true
+    name: ${BOTERVIEW_NETWORK:-boterview_default}
