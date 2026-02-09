@@ -16,6 +16,8 @@ _PROFILE_DEFAULTS = {
         'DB_HOST': 'localhost',
         'DB_USER': 'app',
         'DB_PASSWORD': '1234',
+        'BACK_HOST': 'localhost',
+        'BACK_PORT': '8080',
     },
     'dev': {
         'DEBUG': 'True',
@@ -24,12 +26,16 @@ _PROFILE_DEFAULTS = {
         'DB_NAME': 'boterview',
         'DB_USER': 'root',
         'DB_PASSWORD': 'root',
+        'BACK_HOST': 'boterview-app',
+        'BACK_PORT': '8080',
     },
     'prod': {
         'DEBUG': 'False',
         'ALLOWED_HOSTS': '',
         'DB_USER': 'root',
         'DB_PASSWORD': '',
+        'BACK_HOST': 'boterview-app',
+        'BACK_PORT': '8080',
     },
 }
 
@@ -138,3 +144,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Backend server connection
+BACK_HOST = _env('BACK_HOST', 'localhost')
+BACK_PORT = _env('BACK_PORT', '8080')
