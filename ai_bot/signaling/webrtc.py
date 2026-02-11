@@ -4,6 +4,11 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 from aiortc.mediastreams import MediaStreamTrack
 from websocket import WebSocket
 from . import stomp
+from aiortc.contrib.media import MediaRecorder
+from ..storage import upload_file_to_s3
+from ..db import save_interview_result
+import os
+import asyncio
 
 # 로깅 설정
 logging.basicConfig(
@@ -22,6 +27,10 @@ class WebRTCSession:
         self.peer.on("icecandidate", self._on_ice_candidate)
         self.peer.on("track", self._on_track)
         self.peer.on("connectionstatechange", self._on_connection_state_change)
+        
+        # 미디어 녹화 설정
+        self.recorder = MediaRecorder(f"interview_{room_id}.mp4")
+        self.audio_recorder = MediaRecorder(f"interview_{room_id}.wav")
 
     def _on_ice_candidate(self, candidate: RTCIceCandidate) -> None:
         if candidate:
@@ -38,8 +47,20 @@ class WebRTCSession:
     async def _on_track(self, track: MediaStreamTrack) -> None:
         logger.info(f"[TRACK 수신] kind={track.kind}, id={track.id}, readyState={track.readyState}")
 
+        if track.kind == "audio":
+            self.audio_recorder.addTrack(track)
+            self.recorder.addTrack(track)
+        elif track.kind == "video":
+            self.recorder.addTrack(track)
+
+        await self.recorder.start()
+        await self.audio_recorder.start() 
+
         frame_count = 0
-        start_time = time.time()
+
+        frame_count = 0
+        frame_count = 0
+        self.start_time = time.time()
 
         while True:
             try:
@@ -94,9 +115,42 @@ class WebRTCSession:
 
         logger.info(f"[TRACK 종료] kind={track.kind}, 총 {frame_count}프레임 수신")
 
-    def _on_connection_state_change(self) -> None:
+    async def _on_connection_state_change(self) -> None:
+        logger.info(f"[Connection State] {self.peer.connectionState}")
+
         if self.peer.connectionState == "connected":
             self.stomp_ws.close()
+        elif self.peer.connectionState in ["failed", "closed"]:
+            await self.recorder.stop()
+            await self.audio_recorder.stop()
+            
+            # 별도 스레드나 비동기 태스크로 업로드 진행
+            asyncio.create_task(self._upload_and_save())
+
+    async def _upload_and_save(self) -> None:
+        logger.info("[Upload] s3 upload start...")
+        
+        # Calculate duration
+        duration = 0
+        if hasattr(self, 'start_time'):
+            duration = time.time() - self.start_time
+
+        video_path = f"interview_{self.room_id}.mp4"
+        audio_path = f"interview_{self.room_id}.wav"
+        
+        # 1. Upload to S3
+        video_url = upload_file_to_s3(video_path, "video/mp4")
+        audio_url = upload_file_to_s3(audio_path, "audio/wav")
+        
+        # 2. Save metadata to DB
+        if video_url and audio_url:
+            save_interview_result(self.room_id, video_url, audio_url, duration)
+            
+        # 3. Clean up local files
+        if os.path.exists(video_path):
+            os.remove(video_path)
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
 
     async def handle_offer(self, payload: dict) -> None:
         offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])

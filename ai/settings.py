@@ -1,5 +1,9 @@
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env file
+load_dotenv()
 
 import pymysql
 pymysql.install_as_MySQLdb()
@@ -62,6 +66,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'ai_bot',
 ]
 
 MIDDLEWARE = [
@@ -148,3 +153,10 @@ STATIC_URL = 'static/'
 # Backend server connection
 BACK_HOST = _env('BACK_HOST', 'localhost')
 BACK_PORT = _env('BACK_PORT', '8080')
+BACKEND_API_URL = f"http://{BACK_HOST}:{BACK_PORT}"
+
+# AWS S3 Settings
+AWS_ACCESS_KEY_ID = _env('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = _env('AWS_SECRET_ACCESS_KEY')
+AWS_STORAGE_BUCKET_NAME = _env('AWS_STORAGE_BUCKET_NAME')
+AWS_S3_REGION_NAME = _env('AWS_S3_REGION_NAME', 'ap-northeast-2')
