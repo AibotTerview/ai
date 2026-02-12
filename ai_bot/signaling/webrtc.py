@@ -8,6 +8,7 @@ from aiortc.mediastreams import MediaStreamTrack
 from websocket import WebSocket
 from . import stomp
 from ..stt import transcribe as stt_transcribe
+from ..tts import synthesize as tts_synthesize
 from ..interviewer import InterviewSession
 from ..audio_track import TTSAudioTrack
 
@@ -169,6 +170,18 @@ class WebRTCSession:
         except Exception as e:
             logger.error(f"[Interview] 질문 생성 실패: {e}")
             self.send_dc({"type": "AI_ERROR", "message": "질문 생성에 실패했습니다."})
+
+    # ── TTS 음성 재생 ──────────────────────────────────
+
+    async def _speak(self, text: str) -> None:
+        """TTS 음성 생성 → WebRTC 오디오 트랙 재생 → AI_DONE 전송"""
+        try:
+            pcm_bytes = await tts_synthesize(text, gender=self._gender)
+            await self._tts_track.play(pcm_bytes)
+        except Exception as e:
+            logger.error(f"[TTS] 재생 실패: {e}")
+        finally:
+            self.send_dc({"type": "AI_DONE"})
 
     def _frames_to_wav(self) -> bytes:
         """누적된 오디오 프레임을 WAV 바이트로 변환"""
