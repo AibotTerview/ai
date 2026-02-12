@@ -157,9 +157,17 @@ class WebRTCSession:
 
         logger.info(f"[TRACK 종료] kind={track.kind}")
 
+    # ── 연결 상태 ────────────────────────────────────
+
     def _on_connection_state_change(self) -> None:
-        if self.peer.connectionState == "connected":
+        state = self.peer.connectionState
+        logger.info(f"[연결 상태] {state}")
+        if state == "connected":
             self.stomp_ws.close()
+        elif state in ("failed", "closed"):
+            self.cleanup()
+
+    # ── SDP 핸들링 ───────────────────────────────────
 
     async def handle_offer(self, payload: dict) -> None:
         offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
@@ -179,6 +187,20 @@ class WebRTCSession:
         candidate.sdpMid = payload["sdpMid"]
         candidate.sdpMLineIndex = payload["sdpMLineIndex"]
         await self.peer.addIceCandidate(candidate)
+
+    # ── 리소스 정리 ──────────────────────────────────
+
+    def cleanup(self) -> None:
+        logger.info(f"[세션 정리] room={self.room_id}")
+        self._ptt_active = False
+        self._audio_frames.clear()
+        self._audio_buffer_size = 0
+        if self._dc:
+            try:
+                self._dc.close()
+            except Exception:
+                pass
+            self._dc = None
 
 
 def _parse_candidate(candidate_str: str) -> RTCIceCandidate:
