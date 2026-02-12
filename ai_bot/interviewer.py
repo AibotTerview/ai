@@ -143,8 +143,16 @@ class InterviewSession:
         return result
 
     async def process_answer(self, user_text: str) -> dict:
-        """사용자 답변을 분석하고 다음 질문(또는 마무리)을 생성"""
+        """사용자 답변을 분석하고 다음 질문(또는 마무리)을 생성
+
+        Returns:
+            {"text": str, "expression": str, "finished": bool}
+        """
         self.add_answer(user_text)
+
+        # 마지막 질문이었으면 마무리 멘트 생성
+        if self.is_last_question():
+            return await self._generate_closing()
 
         # 답변 간단 분석 → 프롬프트에 힌트 제공
         analysis_hints = []
@@ -172,9 +180,35 @@ class InterviewSession:
 
         raw = await call_gemini(system_prompt, messages)
         result = self._parse_response(raw)
+        result["finished"] = False
         self.add_question(result["text"])
 
         logger.info(
             f"[Interview] Q{self.question_count}: {result['text'][:80]}... [{result['expression']}]"
         )
+        return result
+
+    async def _generate_closing(self) -> dict:
+        """면접 마무리 멘트 생성"""
+        system_prompt = self._build_system_prompt()
+
+        messages = []
+        for entry in self.history:
+            messages.append({"role": entry["role"], "text": entry["text"]})
+
+        messages.append({
+            "role": "user",
+            "text": (
+                "모든 질문이 끝났습니다. "
+                "면접을 마무리하는 인사를 해 주세요. "
+                "수고했다는 격려와 함께 짧게 마무리합니다."
+            ),
+        })
+
+        raw = await call_gemini(system_prompt, messages)
+        result = self._parse_response(raw)
+        result["finished"] = True
+        self.finished = True
+
+        logger.info(f"[Interview] 마무리: {result['text'][:80]}... [{result['expression']}]")
         return result
