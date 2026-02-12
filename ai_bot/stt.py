@@ -32,9 +32,27 @@ def _transcribe_sync(wav_bytes: bytes) -> str:
     return response.text
 
 
+MAX_RETRIES = 1
+
+
 async def transcribe(wav_bytes: bytes) -> str:
-    """비동기 Whisper STT — 이벤트 루프 블로킹 없이 스레드에서 실행"""
+    """비동기 Whisper STT — 재시도 1회 포함"""
     loop = asyncio.get_event_loop()
-    text = await loop.run_in_executor(None, partial(_transcribe_sync, wav_bytes))
-    logger.info(f"[STT] 결과: {text[:100]}...")
-    return text
+    last_error: Exception | None = None
+
+    for attempt in range(1 + MAX_RETRIES):
+        try:
+            text = await loop.run_in_executor(
+                None, partial(_transcribe_sync, wav_bytes)
+            )
+            logger.info(f"[STT] 결과: {text[:100]}...")
+            return text
+        except Exception as e:
+            last_error = e
+            if attempt < MAX_RETRIES:
+                logger.warning(f"[STT] 실패 (시도 {attempt + 1}), 재시도: {e}")
+                await asyncio.sleep(0.5)
+            else:
+                logger.error(f"[STT] 최종 실패: {e}")
+
+    return f"[STT 오류] {last_error}"
