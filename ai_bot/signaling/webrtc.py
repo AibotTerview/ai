@@ -9,6 +9,7 @@ from websocket import WebSocket
 from . import stomp
 from ..stt import transcribe as stt_transcribe
 from ..interviewer import InterviewSession
+from ..audio_track import TTSAudioTrack
 
 # 로깅 설정
 logging.basicConfig(
@@ -47,6 +48,10 @@ class WebRTCSession:
 
         # 면접 세션 (DataChannel 연결 시 초기화)
         self._interview: InterviewSession | None = None
+
+        # TTS 오디오 트랙 (offer 처리 시 peer에 추가)
+        self._tts_track = TTSAudioTrack()
+        self._gender = "male"
 
     # ── DataChannel ─────────────────────────────────
 
@@ -236,6 +241,9 @@ class WebRTCSession:
     async def handle_offer(self, payload: dict) -> None:
         offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
         await self.peer.setRemoteDescription(offer)
+
+        # TTS 오디오 트랙 추가 (answer 생성 전에 추가해야 SDP에 포함)
+        self.peer.addTrack(self._tts_track)
 
         answer = await self.peer.createAnswer()
         await self.peer.setLocalDescription(answer)
