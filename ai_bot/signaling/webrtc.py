@@ -1,5 +1,8 @@
+import io
 import json
+import wave
 import logging
+import asyncio
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 from aiortc.mediastreams import MediaStreamTrack
 from websocket import WebSocket
@@ -12,6 +15,9 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+# PTT 오디오 버퍼 최대 크기 (3분 @ 48kHz mono 16bit ≈ 17MB)
+MAX_AUDIO_BUFFER_BYTES = 18 * 1024 * 1024
 
 
 class WebRTCSession:
@@ -26,6 +32,16 @@ class WebRTCSession:
 
         # DataChannel
         self._dc = None
+
+        # PTT 오디오 버퍼링
+        self._ptt_active = False
+        self._audio_frames: list[bytes] = []
+        self._audio_buffer_size = 0
+        self._audio_sample_rate = 48000
+        self._audio_channels = 1
+
+        # 콜백: PTT_END 시 WAV 데이터를 처리하는 함수 (외부에서 설정)
+        self.on_ptt_audio = None  # async def callback(wav_bytes: bytes)
 
     # ── DataChannel ─────────────────────────────────
 
@@ -45,6 +61,11 @@ class WebRTCSession:
         msg_type = data.get("type")
         logger.info(f"[DC 수신] type={msg_type}")
 
+        if msg_type == "PTT_START":
+            self._start_recording()
+        elif msg_type == "PTT_END":
+            self._stop_recording()
+
     def _on_dc_close(self) -> None:
         logger.info("[DataChannel 종료]")
         self._dc = None
@@ -55,6 +76,46 @@ class WebRTCSession:
             self._dc.send(json.dumps(data, ensure_ascii=False))
         else:
             logger.warning("[DC] 채널이 열려있지 않아 전송 불가")
+
+    # ── PTT 오디오 버퍼링 ───────────────────────────
+
+    def _start_recording(self) -> None:
+        logger.info("[PTT] 녹음 시작")
+        self._ptt_active = True
+        self._audio_frames.clear()
+        self._audio_buffer_size = 0
+
+    def _stop_recording(self) -> None:
+        logger.info(f"[PTT] 녹음 종료 — {len(self._audio_frames)}프레임, {self._audio_buffer_size}bytes")
+        self._ptt_active = False
+
+        if not self._audio_frames:
+            logger.warning("[PTT] 오디오 프레임 없음, 무시")
+            return
+
+        wav_bytes = self._frames_to_wav()
+        self._audio_frames.clear()
+        self._audio_buffer_size = 0
+
+        if self.on_ptt_audio:
+            loop = asyncio.get_event_loop()
+            asyncio.ensure_future(self.on_ptt_audio(wav_bytes), loop=loop)
+
+    def _frames_to_wav(self) -> bytes:
+        """누적된 오디오 프레임을 WAV 바이트로 변환"""
+        buf = io.BytesIO()
+        with wave.open(buf, 'wb') as wf:
+            wf.setnchannels(self._audio_channels)
+            wf.setsampwidth(2)  # 16bit
+            wf.setframerate(self._audio_sample_rate)
+            for raw in self._audio_frames:
+                wf.writeframes(raw)
+        wav_bytes = buf.getvalue()
+        buf.close()
+        logger.info(f"[PTT] WAV 변환 완료: {len(wav_bytes)} bytes")
+        return wav_bytes
+
+    # ── ICE ──────────────────────────────────────────
 
     def _on_ice_candidate(self, candidate: RTCIceCandidate) -> None:
         if candidate:
@@ -68,64 +129,33 @@ class WebRTCSession:
                 },
             })
 
-    async def _on_track(self, track: MediaStreamTrack) -> None:
-        logger.info(f"[TRACK 수신] kind={track.kind}, id={track.id}, readyState={track.readyState}")
+    # ── Track 수신 (오디오/비디오) ───────────────────
 
-        frame_count = 0
-        start_time = time.time()
+    async def _on_track(self, track: MediaStreamTrack) -> None:
+        logger.info(f"[TRACK 수신] kind={track.kind}, id={track.id}")
+
+        if track.kind != "audio":
+            return
 
         while True:
             try:
                 frame = await track.recv()
-                frame_count += 1
-                elapsed = time.time() - start_time
-
-                if track.kind == "audio":
-                    # AudioFrame 로깅
-                    logger.debug(
-                        f"[AUDIO FRAME #{frame_count}] "
-                        f"samples={frame.samples}, "
-                        f"sample_rate={frame.sample_rate}Hz, "
-                        f"channels={len(frame.layout.channels)}, "
-                        f"format={frame.format.name}, "
-                        f"pts={frame.pts}, "
-                        f"elapsed={elapsed:.2f}s"
-                    )
-
-                    # 10프레임마다 요약 로깅
-                    if frame_count % 10 == 0:
-                        fps = frame_count / elapsed if elapsed > 0 else 0
-                        logger.info(
-                            f"[AUDIO 요약] 총 {frame_count}프레임 수신, "
-                            f"평균 {fps:.1f}fps, "
-                            f"sample_rate={frame.sample_rate}Hz"
-                        )
-
-                elif track.kind == "video":
-                    # VideoFrame 로깅
-                    logger.debug(
-                        f"[VIDEO FRAME #{frame_count}] "
-                        f"size={frame.width}x{frame.height}, "
-                        f"format={frame.format.name}, "
-                        f"pts={frame.pts}, "
-                        f"time_base={frame.time_base}, "
-                        f"elapsed={elapsed:.2f}s"
-                    )
-
-                    # 30프레임마다 요약 로깅
-                    if frame_count % 30 == 0:
-                        fps = frame_count / elapsed if elapsed > 0 else 0
-                        logger.info(
-                            f"[VIDEO 요약] 총 {frame_count}프레임 수신, "
-                            f"평균 {fps:.1f}fps, "
-                            f"해상도={frame.width}x{frame.height}"
-                        )
-
-            except Exception as e:
-                logger.error(f"[TRACK 에러] kind={track.kind}, error={e}")
+            except Exception:
                 break
 
-        logger.info(f"[TRACK 종료] kind={track.kind}, 총 {frame_count}프레임 수신")
+            self._audio_sample_rate = frame.sample_rate
+            self._audio_channels = len(frame.layout.channels)
+
+            # PTT 활성 시에만 버퍼에 저장
+            if self._ptt_active:
+                raw = frame.to_ndarray().tobytes()
+                if self._audio_buffer_size + len(raw) <= MAX_AUDIO_BUFFER_BYTES:
+                    self._audio_frames.append(raw)
+                    self._audio_buffer_size += len(raw)
+                else:
+                    logger.warning("[PTT] 오디오 버퍼 최대 크기 초과, 프레임 무시")
+
+        logger.info(f"[TRACK 종료] kind={track.kind}")
 
     def _on_connection_state_change(self) -> None:
         if self.peer.connectionState == "connected":
