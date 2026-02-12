@@ -108,3 +108,36 @@ class InterviewSession:
 
     def is_last_question(self) -> bool:
         return self.question_count >= self.max_questions
+
+    def _build_system_prompt(self) -> str:
+        persona_text = PERSONA_PROMPTS.get(self.persona, PERSONA_PROMPTS["FORMAL"])
+        return (
+            f"{persona_text}\n\n"
+            f"면접 진행 규칙:\n"
+            f"- 한 번에 하나의 질문만 합니다.\n"
+            f"- 질문은 간결하게 1~3문장으로 합니다.\n"
+            f"- 현재 {self.question_count}/{self.max_questions}번째 질문입니다.\n\n"
+            f"{EXPRESSION_GUIDE}"
+        )
+
+    @staticmethod
+    def _parse_response(raw: str) -> dict:
+        """LLM 응답에서 텍스트와 표정 태그를 분리"""
+        match = re.search(r"\[expression:(\w+)]", raw)
+        expression = match.group(1) if match else "neutral"
+        text = re.sub(r"\s*\[expression:\w+]\s*", "", raw).strip()
+        return {"text": text, "expression": expression}
+
+    async def generate_first_question(self) -> dict:
+        """첫 질문 생성 (자기소개 요청)"""
+        system_prompt = self._build_system_prompt()
+        messages = [
+            {"role": "user", "text": "면접을 시작합니다. 첫 질문으로 자기소개를 요청해 주세요."}
+        ]
+
+        raw = await call_gemini(system_prompt, messages)
+        result = self._parse_response(raw)
+        self.add_question(result["text"])
+
+        logger.info(f"[Interview] 첫 질문: {result['text'][:80]}... [{result['expression']}]")
+        return result
