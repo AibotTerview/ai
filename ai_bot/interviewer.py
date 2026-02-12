@@ -141,3 +141,40 @@ class InterviewSession:
 
         logger.info(f"[Interview] 첫 질문: {result['text'][:80]}... [{result['expression']}]")
         return result
+
+    async def process_answer(self, user_text: str) -> dict:
+        """사용자 답변을 분석하고 다음 질문(또는 마무리)을 생성"""
+        self.add_answer(user_text)
+
+        # 답변 간단 분석 → 프롬프트에 힌트 제공
+        analysis_hints = []
+        if len(user_text) < 20:
+            analysis_hints.append("지원자의 답변이 매우 짧습니다. 더 구체적으로 답변하도록 유도해 주세요.")
+        if len(user_text) > 500:
+            analysis_hints.append("지원자의 답변이 길었습니다. 핵심을 요약하도록 유도할 수 있습니다.")
+
+        hint_text = "\n".join(analysis_hints)
+
+        system_prompt = self._build_system_prompt()
+        if hint_text:
+            system_prompt += f"\n\n분석 참고:\n{hint_text}"
+
+        # 대화 히스토리를 Gemini에 전달
+        messages = []
+        for entry in self.history:
+            messages.append({"role": entry["role"], "text": entry["text"]})
+
+        # 다음 질문 요청 추가
+        messages.append({
+            "role": "user",
+            "text": "위 답변을 바탕으로 다음 면접 질문을 해 주세요.",
+        })
+
+        raw = await call_gemini(system_prompt, messages)
+        result = self._parse_response(raw)
+        self.add_question(result["text"])
+
+        logger.info(
+            f"[Interview] Q{self.question_count}: {result['text'][:80]}... [{result['expression']}]"
+        )
+        return result
