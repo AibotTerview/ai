@@ -7,4 +7,15 @@ aiortc
 djangorestframework
 boto3
 python-dotenv
-google-generativeai
+
+# STT (OpenAI Whisper API)
+openai>=1.0
+
+# LLM (Google Gemini)
+google-generativeai>=0.8
+
+# TTS (Google Cloud)
+google-cloud-texttospeech>=2.16
+
+# Audio processing
+numpy
