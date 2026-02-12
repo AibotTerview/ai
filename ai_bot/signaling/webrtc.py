@@ -7,6 +7,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 from aiortc.mediastreams import MediaStreamTrack
 from websocket import WebSocket
 from . import stomp
+from ..stt import transcribe as stt_transcribe
 
 # 로깅 설정
 logging.basicConfig(
@@ -97,9 +98,19 @@ class WebRTCSession:
         self._audio_frames.clear()
         self._audio_buffer_size = 0
 
+        # STT 파이프라인 실행
+        loop = asyncio.get_event_loop()
+        asyncio.ensure_future(self._process_stt(wav_bytes), loop=loop)
+
+    async def _process_stt(self, wav_bytes: bytes) -> None:
+        """WAV → Whisper STT → DataChannel로 결과 전송"""
+        text = await stt_transcribe(wav_bytes)
+        self.send_dc({"type": "USER_STT", "text": text})
+        logger.info(f"[STT→DC] USER_STT 전송: {text[:80]}...")
+
+        # 외부 콜백이 있으면 호출 (LLM 등 후속 처리용)
         if self.on_ptt_audio:
-            loop = asyncio.get_event_loop()
-            asyncio.ensure_future(self.on_ptt_audio(wav_bytes), loop=loop)
+            await self.on_ptt_audio(text)
 
     def _frames_to_wav(self) -> bytes:
         """누적된 오디오 프레임을 WAV 바이트로 변환"""
