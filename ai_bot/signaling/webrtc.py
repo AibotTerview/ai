@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 # PTT 오디오 버퍼 최대 크기 (3분 @ 48kHz mono 16bit ≈ 17MB)
 MAX_AUDIO_BUFFER_BYTES = 18 * 1024 * 1024
 
+# 타임아웃 설정 (초)
+INTERVIEW_MAX_DURATION = 30 * 60  # 면접 최대 30분
+PTT_NO_RESPONSE_TIMEOUT = 2 * 60  # PTT 무응답 타임아웃 2분
+PTT_MAX_RECORDING_DURATION = 3 * 60  # PTT 최대 녹음 3분
+
 
 class WebRTCSession:
     def __init__(self, room_id: str, stomp_ws: WebSocket) -> None:
@@ -59,6 +64,47 @@ class WebRTCSession:
         self._cleaned_up = False
         self._interview_timer: asyncio.TimerHandle | None = None
         self._ptt_timeout_timer: asyncio.TimerHandle | None = None
+        self._ptt_recording_start: float = 0.0
+
+    # ── 타임아웃 관리 ──────────────────────────────────
+
+    def _start_interview_timer(self) -> None:
+        """면접 최대 시간 타이머 시작 (30분)"""
+        loop = asyncio.get_event_loop()
+        self._interview_timer = loop.call_later(
+            INTERVIEW_MAX_DURATION, self._on_interview_timeout
+        )
+        logger.info(f"[타이머] 면접 타이머 시작: {INTERVIEW_MAX_DURATION}초")
+
+    def _reset_ptt_timeout(self) -> None:
+        """PTT 무응답 타이머 리셋 (2분)"""
+        if self._ptt_timeout_timer:
+            self._ptt_timeout_timer.cancel()
+        loop = asyncio.get_event_loop()
+        self._ptt_timeout_timer = loop.call_later(
+            PTT_NO_RESPONSE_TIMEOUT, self._on_ptt_timeout
+        )
+
+    def _on_interview_timeout(self) -> None:
+        """면접 최대 시간 초과"""
+        logger.warning(f"[타임아웃] 면접 최대 시간({INTERVIEW_MAX_DURATION}초) 초과, room={self.room_id}")
+        self.send_dc({
+            "type": "INTERVIEW_END",
+            "text": "면접 시간이 초과되어 자동 종료됩니다.",
+            "expression": "neutral",
+        })
+        from . import remove_session
+        remove_session(self.room_id)
+
+    def _on_ptt_timeout(self) -> None:
+        """PTT 무응답 타임아웃"""
+        logger.warning(f"[타임아웃] PTT 무응답({PTT_NO_RESPONSE_TIMEOUT}초) 초과, room={self.room_id}")
+        self.send_dc({
+            "type": "AI_ERROR",
+            "message": "응답이 없어 면접이 종료됩니다.",
+        })
+        from . import remove_session
+        remove_session(self.room_id)
 
     # ── DataChannel ─────────────────────────────────
 
@@ -68,9 +114,10 @@ class WebRTCSession:
         self._dc.on("message", self._on_dc_message)
         self._dc.on("close", self._on_dc_close)
 
-        # 면접 세션 시작
+        # 면접 세션 시작 + 타이머
         loop = asyncio.get_event_loop()
         asyncio.ensure_future(self._start_interview(), loop=loop)
+        self._start_interview_timer()
 
     def _on_dc_message(self, message) -> None:
         try:
@@ -105,6 +152,11 @@ class WebRTCSession:
         self._ptt_active = True
         self._audio_frames.clear()
         self._audio_buffer_size = 0
+        self._ptt_recording_start = asyncio.get_event_loop().time()
+        # PTT 무응답 타이머 취소 (사용자가 응답함)
+        if self._ptt_timeout_timer:
+            self._ptt_timeout_timer.cancel()
+            self._ptt_timeout_timer = None
 
     def _stop_recording(self) -> None:
         logger.info(f"[PTT] 녹음 종료 — {len(self._audio_frames)}프레임, {self._audio_buffer_size}bytes")
@@ -191,6 +243,8 @@ class WebRTCSession:
             logger.error(f"[TTS] 재생 실패: {e}")
         finally:
             self.send_dc({"type": "AI_DONE"})
+            # AI 응답 완료 후 PTT 무응답 타이머 시작
+            self._reset_ptt_timeout()
 
     def _frames_to_wav(self) -> bytes:
         """누적된 오디오 프레임을 WAV 바이트로 변환"""
@@ -239,6 +293,14 @@ class WebRTCSession:
 
             # PTT 활성 시에만 버퍼에 저장
             if self._ptt_active:
+                # PTT 최대 녹음 시간 초과 시 자동 종료
+                elapsed = asyncio.get_event_loop().time() - self._ptt_recording_start
+                if elapsed >= PTT_MAX_RECORDING_DURATION:
+                    logger.warning(f"[PTT] 최대 녹음 시간({PTT_MAX_RECORDING_DURATION}초) 초과, 자동 종료")
+                    self.send_dc({"type": "PTT_TIMEOUT"})
+                    self._stop_recording()
+                    continue
+
                 raw = frame.to_ndarray().tobytes()
                 if self._audio_buffer_size + len(raw) <= MAX_AUDIO_BUFFER_BYTES:
                     self._audio_frames.append(raw)
