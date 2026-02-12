@@ -1,3 +1,4 @@
+import gc
 import io
 import json
 import wave
@@ -53,6 +54,11 @@ class WebRTCSession:
         # TTS 오디오 트랙 (offer 처리 시 peer에 추가)
         self._tts_track = TTSAudioTrack()
         self._gender = "male"
+
+        # 세션 상태
+        self._cleaned_up = False
+        self._interview_timer: asyncio.TimerHandle | None = None
+        self._ptt_timeout_timer: asyncio.TimerHandle | None = None
 
     # ── DataChannel ─────────────────────────────────
 
@@ -248,9 +254,13 @@ class WebRTCSession:
         state = self.peer.connectionState
         logger.info(f"[연결 상태] {state}")
         if state == "connected":
-            self.stomp_ws.close()
+            try:
+                self.stomp_ws.close()
+            except Exception:
+                pass
         elif state in ("failed", "closed"):
-            self.cleanup()
+            from . import remove_session
+            remove_session(self.room_id)
 
     # ── SDP 핸들링 ───────────────────────────────────
 
@@ -279,20 +289,56 @@ class WebRTCSession:
     # ── 리소스 정리 ──────────────────────────────────
 
     def cleanup(self) -> None:
+        if self._cleaned_up:
+            return
+        self._cleaned_up = True
+
         logger.info(f"[세션 정리] room={self.room_id}")
+
+        # 타이머 취소
+        if self._interview_timer:
+            self._interview_timer.cancel()
+            self._interview_timer = None
+        if self._ptt_timeout_timer:
+            self._ptt_timeout_timer.cancel()
+            self._ptt_timeout_timer = None
+
+        # 오디오 버퍼 정리
         self._ptt_active = False
         self._audio_frames.clear()
         self._audio_buffer_size = 0
+
+        # 면접 세션 정리
         self._interview = None
+
+        # TTS 트랙 정리
         if self._tts_track:
             self._tts_track.stop()
             self._tts_track = None
+
+        # DataChannel 정리
         if self._dc:
             try:
                 self._dc.close()
             except Exception:
                 pass
             self._dc = None
+
+        # PeerConnection 정리
+        if self.peer:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(self.peer.close(), loop=loop)
+                else:
+                    loop.run_until_complete(self.peer.close())
+            except Exception as e:
+                logger.warning(f"[세션 정리] peer close 실패: {e}")
+            self.peer = None
+
+        # GC 강제 실행
+        gc.collect()
+        logger.info(f"[세션 정리 완료] room={self.room_id}")
 
 
 def _parse_candidate(candidate_str: str) -> RTCIceCandidate:
