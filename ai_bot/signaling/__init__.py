@@ -19,12 +19,19 @@ _sessions_lock = threading.Lock()
 MAX_CONCURRENT_SESSIONS = 10
 
 
-def start(room_id: str) -> None:
+def start(room_id: str) -> bool:
+    """세션 시작. 성공 시 True, 동시 세션 초과 시 False."""
     with _sessions_lock:
         if len(_sessions) >= MAX_CONCURRENT_SESSIONS:
             logger.error(f"[세션 제한] 최대 동시 세션({MAX_CONCURRENT_SESSIONS}) 초과, room={room_id} 거부")
-            return
+            return False
     threading.Thread(target=_run_loop, args=(room_id,), daemon=True).start()
+    return True
+
+
+def active_session_count() -> int:
+    with _sessions_lock:
+        return len(_sessions)
 
 
 def get_session(room_id: str) -> WebRTCSession | None:

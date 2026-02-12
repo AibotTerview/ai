@@ -19,5 +19,10 @@ def notify(request):
         return JsonResponse(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     room_id = serializer.validated_data["roomId"]
-    signaling.start(room_id)
+    started = signaling.start(room_id)
+    if not started:
+        return JsonResponse(
+            {"error": "서버가 가득 찼습니다. 잠시 후 다시 시도해 주세요."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
     return JsonResponse({"status": "ok"})
