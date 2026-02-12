@@ -52,9 +52,19 @@ def _recv_loop(room_id: str, loop: asyncio.AbstractEventLoop) -> None:
             payload: dict | None = data.get("payload")
 
             if msg_type == "WEBRTC_OFFER":
+                # 기존 세션이 있으면 정리
+                if session:
+                    print(f"[기존 세션 정리] room_id={room_id}", flush=True)
+                    asyncio.run_coroutine_threadsafe(session.close(), loop)
+
                 session = WebRTCSession(room_id, ws)
                 asyncio.run_coroutine_threadsafe(session.handle_offer(payload), loop)
             elif msg_type == "ICE_CANDIDATE" and session:
                 asyncio.run_coroutine_threadsafe(session.handle_ice(payload), loop)
     except websocket.WebSocketConnectionClosedException:
         print("[STOMP 연결 종료]", flush=True)
+    finally:
+        # 루프 종료 시 세션 정리
+        if session:
+            print(f"[세션 정리] room_id={room_id}", flush=True)
+            asyncio.run_coroutine_threadsafe(session.close(), loop)

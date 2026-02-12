@@ -6,14 +6,14 @@ from .models import Interview, InterviewMaterial, InterviewScore, InterviewQuest
 
 logger = logging.getLogger(__name__)
 
-def save_interview_result(room_id: str, video_url: str, audio_url: str, duration: float) -> bool:
+def save_interview_result(room_id: str, video_url: str, audio_url: str, duration: float, stt_text: str = None) -> bool:
     """
     인터뷰 결과를 Django ORM을 사용하여 DB에 저장합니다.
     """
-    
+
     # Placeholder / Dummy Data
     dummy_summary = "전반적으로 우수한 면접이었습니다. (AI 요약)"
-    dummy_stt = "안녕하세요. 저는 이 프로젝트에 지원한 지원자입니다. 성실하게 답변하겠습니다."
+    dummy_stt = stt_text if stt_text else "안녕하세요. 저는 이 프로젝트에 지원한 지원자입니다. 성실하게 답변하겠습니다."
     dummy_evaluation = "목소리가 또렷하고 자신감이 넘칩니다. (AI 평가 상세)"
     dummy_score = 80
     
