@@ -133,7 +133,7 @@ class WebRTCSession:
     # ── 면접 세션 관리 ────────────────────────────────
 
     async def _start_interview(self, persona: str = "FORMAL", max_questions: int = 8) -> None:
-        """면접 세션 초기화 + 첫 질문 전송"""
+        """면접 세션 초기화 + 첫 질문 생성 + TTS 음성 전송"""
         self._interview = InterviewSession(persona=persona, max_questions=max_questions)
 
         try:
@@ -145,12 +145,13 @@ class WebRTCSession:
                 "questionNumber": self._interview.question_count,
                 "totalQuestions": self._interview.max_questions,
             })
+            await self._speak(result["text"])
         except Exception as e:
             logger.error(f"[Interview] 첫 질문 생성 실패: {e}")
             self.send_dc({"type": "AI_ERROR", "message": "면접 시작에 실패했습니다."})
 
     async def _handle_interview_answer(self, user_text: str) -> None:
-        """사용자 답변 → LLM → 다음 질문 또는 종료"""
+        """사용자 답변 → LLM → 다음 질문 + TTS 또는 종료"""
         try:
             result = await self._interview.process_answer(user_text)
             if result["finished"]:
@@ -159,6 +160,7 @@ class WebRTCSession:
                     "text": result["text"],
                     "expression": result["expression"],
                 })
+                await self._speak(result["text"])
             else:
                 self.send_dc({
                     "type": "AI_QUESTION",
@@ -167,6 +169,7 @@ class WebRTCSession:
                     "questionNumber": self._interview.question_count,
                     "totalQuestions": self._interview.max_questions,
                 })
+                await self._speak(result["text"])
         except Exception as e:
             logger.error(f"[Interview] 질문 생성 실패: {e}")
             self.send_dc({"type": "AI_ERROR", "message": "질문 생성에 실패했습니다."})
@@ -281,6 +284,9 @@ class WebRTCSession:
         self._audio_frames.clear()
         self._audio_buffer_size = 0
         self._interview = None
+        if self._tts_track:
+            self._tts_track.stop()
+            self._tts_track = None
         if self._dc:
             try:
                 self._dc.close()
