@@ -60,6 +60,10 @@ class WebRTCSession:
         self._tts_track = TTSAudioTrack()
         self._gender = "male"
 
+        # ICE candidate buffering (remote description 설정 전 도착한 후보 버퍼링)
+        self._remote_desc_set = False
+        self._pending_remote_ice: list[dict] = []
+
         # 세션 상태
         self._cleaned_up = False
         self._interview_timer: asyncio.TimerHandle | None = None
@@ -274,17 +278,79 @@ class WebRTCSession:
 
     # ── ICE ──────────────────────────────────────────
 
-    def _on_ice_candidate(self, candidate: RTCIceCandidate) -> None:
+    def _on_ice_candidate(self, candidate) -> None:
+        logger.info(f"[ICE 이벤트] icecandidate 발생: {candidate}")
         if candidate:
-            stomp.send(self.stomp_ws, "/app/signal/webrtc/ice", {
-                "type": "ICE_CANDIDATE",
-                "roomId": self.room_id,
-                "payload": {
-                    "candidate": candidate.candidate,
-                    "sdpMid": candidate.sdpMid,
-                    "sdpMLineIndex": candidate.sdpMLineIndex,
-                },
-            })
+            try:
+                stomp.send(self.stomp_ws, "/app/signal/webrtc/ice", {
+                    "type": "ICE_CANDIDATE",
+                    "roomId": self.room_id,
+                    "payload": {
+                        "candidate": f"candidate:{candidate.foundation} {candidate.component} {candidate.protocol} {candidate.priority} {candidate.host} {candidate.port} typ {candidate.type}",
+                        "sdpMid": getattr(candidate, 'sdpMid', '0'),
+                        "sdpMLineIndex": getattr(candidate, 'sdpMLineIndex', 0),
+                    },
+                })
+            except Exception as e:
+                logger.error(f"[ICE 이벤트] 전송 실패: {e}")
+
+    async def _send_local_candidates(self) -> None:
+        """ICE gathering 완료 후 로컬 후보를 프론트엔드로 STOMP 전송"""
+        try:
+            # aiortc 내부 구조를 통해 ICE 후보 추출
+            ice_connection = None
+            mid = "0"
+
+            # BUNDLE 정책: 첫 번째 transceiver의 ICE transport에서 추출
+            for transceiver in getattr(self.peer, '_transceivers', []):
+                dtls = getattr(transceiver, '_transport', None)
+                if dtls is None:
+                    continue
+                ice = getattr(dtls, 'transport', None)
+                if ice is None:
+                    continue
+                ice_connection = getattr(ice, '_connection', None)
+                mid = getattr(transceiver, 'mid', '0') or '0'
+                if ice_connection:
+                    break
+
+            # SCTP transport에서도 시도
+            if not ice_connection:
+                sctp = getattr(self.peer, '_sctpTransport', None)
+                if sctp:
+                    dtls = getattr(sctp, '_dtls_transport', None) or getattr(sctp, 'transport', None)
+                    if dtls:
+                        ice = getattr(dtls, 'transport', None)
+                        if ice:
+                            ice_connection = getattr(ice, '_connection', None)
+
+            if not ice_connection:
+                logger.warning("[ICE 전송] ICE connection을 찾을 수 없음")
+                return
+
+            candidates = getattr(ice_connection, 'local_candidates', [])
+            logger.info(f"[ICE 전송] 로컬 후보 {len(candidates)}개 발견")
+
+            for c in candidates:
+                candidate_str = (
+                    f"candidate:{c.foundation} {c.component} {c.protocol} "
+                    f"{c.priority} {c.host} {c.port} typ {c.type}"
+                )
+                if getattr(c, 'related_address', None):
+                    candidate_str += f" raddr {c.related_address} rport {c.related_port}"
+
+                stomp.send(self.stomp_ws, "/app/signal/webrtc/ice", {
+                    "type": "ICE_CANDIDATE",
+                    "roomId": self.room_id,
+                    "payload": {
+                        "candidate": candidate_str,
+                        "sdpMid": mid,
+                        "sdpMLineIndex": 0,
+                    },
+                })
+                logger.info(f"[ICE 전송] {candidate_str}")
+        except Exception as e:
+            logger.error(f"[ICE 전송 실패] {e}", exc_info=True)
 
     # ── Track 수신 (오디오/비디오) ───────────────────
 
@@ -341,24 +407,62 @@ class WebRTCSession:
     async def handle_offer(self, payload: dict) -> None:
         offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
         await self.peer.setRemoteDescription(offer)
+        logger.info("[SDP] Remote description 설정 완료")
+
+        # 버퍼링된 ICE 후보 처리
+        self._remote_desc_set = True
+        if self._pending_remote_ice:
+            logger.info(f"[ICE] 버퍼링된 후보 {len(self._pending_remote_ice)}개 처리")
+            for ice_payload in self._pending_remote_ice:
+                try:
+                    candidate = _parse_candidate(ice_payload["candidate"])
+                    candidate.sdpMid = ice_payload.get("sdpMid")
+                    candidate.sdpMLineIndex = ice_payload.get("sdpMLineIndex")
+                    await self.peer.addIceCandidate(candidate)
+                    logger.info(f"[ICE] 버퍼링 후보 추가: {ice_payload['candidate'][:60]}")
+                except Exception as e:
+                    logger.error(f"[ICE] 버퍼링 후보 추가 실패: {e}")
+            self._pending_remote_ice.clear()
 
         # TTS 오디오 트랙 추가 (answer 생성 전에 추가해야 SDP에 포함)
         self.peer.addTrack(self._tts_track)
 
         answer = await self.peer.createAnswer()
         await self.peer.setLocalDescription(answer)
+        logger.info("[SDP] Local description(answer) 설정 완료")
 
+        # ICE gathering 완료 대기 (최대 10초)
+        for _ in range(200):
+            if self.peer.iceGatheringState == "complete":
+                break
+            await asyncio.sleep(0.05)
+        logger.info(f"[ICE] Gathering state: {self.peer.iceGatheringState}")
+
+        # Answer 전송
         stomp.send(self.stomp_ws, "/app/signal/webrtc/answer", {
             "type": "WEBRTC_ANSWER",
             "roomId": self.room_id,
-            "payload": {"sdp": answer.sdp, "type": answer.type},
+            "payload": {"sdp": self.peer.localDescription.sdp, "type": self.peer.localDescription.type},
         })
+        logger.info("[SDP] Answer 전송 완료")
+
+        # AI 서버의 ICE 후보를 프론트엔드로 전송
+        await self._send_local_candidates()
 
     async def handle_ice(self, payload: dict) -> None:
-        candidate = _parse_candidate(payload["candidate"])
-        candidate.sdpMid = payload["sdpMid"]
-        candidate.sdpMLineIndex = payload["sdpMLineIndex"]
-        await self.peer.addIceCandidate(candidate)
+        if not self._remote_desc_set:
+            logger.info("[ICE] Remote description 미설정 — 후보 버퍼링")
+            self._pending_remote_ice.append(payload)
+            return
+
+        try:
+            candidate = _parse_candidate(payload["candidate"])
+            candidate.sdpMid = payload.get("sdpMid")
+            candidate.sdpMLineIndex = payload.get("sdpMLineIndex")
+            await self.peer.addIceCandidate(candidate)
+            logger.info(f"[ICE] 원격 후보 추가: {payload['candidate'][:60]}")
+        except Exception as e:
+            logger.error(f"[ICE] 원격 후보 추가 실패: {e}")
 
     # ── 리소스 정리 ──────────────────────────────────
 
