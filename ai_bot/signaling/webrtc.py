@@ -84,7 +84,19 @@ class WebRTCSession:
         if self._dc and self._dc.readyState == "open":
             self._dc.send(json.dumps(data, ensure_ascii=False))
         else:
-            logger.warning("[DC] 채널이 열려있지 않아 전송 불가")
+            logger.warning(f"[DC] 채널이 열려있지 않아 전송 불가: {data.get('type')}")
+
+    async def send_dc_async(self, data: dict, timeout: float = 10.0) -> bool:
+        """DataChannel이 열릴 때까지 대기 후 전송"""
+        elapsed = 0.0
+        while elapsed < timeout:
+            if self._dc and self._dc.readyState == "open":
+                self._dc.send(json.dumps(data, ensure_ascii=False))
+                return True
+            await asyncio.sleep(0.1)
+            elapsed += 0.1
+        logger.warning(f"[DC] 타임아웃 — 전송 실패: {data.get('type')}")
+        return False
 
     # ── PTT 오디오 버퍼링 ───────────────────────────
 
@@ -132,13 +144,15 @@ class WebRTCSession:
 
         try:
             result = await self._interview.generate_first_question()
-            self.send_dc({
+            await self.send_dc_async({
                 "type": "AI_QUESTION",
                 "text": result["text"],
                 "expression": result["expression"],
                 "questionNumber": self._interview.question_count,
                 "totalQuestions": self._interview.max_questions,
             })
+            # TTS 미구현 → 즉시 AI_DONE 전송하여 사용자 PTT 버튼 활성화
+            self.send_dc({"type": "AI_DONE"})
         except Exception as e:
             logger.error(f"[Interview] 첫 질문 생성 실패: {e}")
             self.send_dc({"type": "AI_ERROR", "message": "면접 시작에 실패했습니다."})
@@ -161,6 +175,8 @@ class WebRTCSession:
                     "questionNumber": self._interview.question_count,
                     "totalQuestions": self._interview.max_questions,
                 })
+            # TTS 미구현 → 즉시 AI_DONE 전송하여 사용자 PTT 버튼 활성화
+            self.send_dc({"type": "AI_DONE"})
         except Exception as e:
             logger.error(f"[Interview] 질문 생성 실패: {e}")
             self.send_dc({"type": "AI_ERROR", "message": "질문 생성에 실패했습니다."})
