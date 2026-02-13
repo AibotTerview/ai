@@ -7,22 +7,22 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-# ── Gemini 클라이언트 (싱글턴) ─────────────────────────
+# ── Gemini 클라이언트 ─────────────────────────────────
 
-_model = None
-
-
-def _get_model():
-    global _model
-    if _model is None:
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        _model = genai.GenerativeModel("gemini-2.0-flash")
-    return _model
+_configured = False
 
 
 def _call_gemini_sync(system_prompt: str, messages: list[dict]) -> str:
     """동기 Gemini API 호출 (스레드에서 실행)"""
-    model = _get_model()
+    global _configured
+    if not _configured:
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        _configured = True
+
+    model = genai.GenerativeModel(
+        "gemini-2.5-flash",
+        system_instruction=system_prompt,
+    )
 
     contents = []
     for msg in messages:
@@ -35,7 +35,6 @@ def _call_gemini_sync(system_prompt: str, messages: list[dict]) -> str:
             temperature=0.7,
             max_output_tokens=300,
         ),
-        system_instruction=system_prompt,
     )
     return response.text
 
