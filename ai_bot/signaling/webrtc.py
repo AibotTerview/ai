@@ -8,6 +8,7 @@ from aiortc.mediastreams import MediaStreamTrack
 from websocket import WebSocket
 from . import stomp
 from ..stt import transcribe as stt_transcribe
+from ..interviewer import InterviewSession
 
 # 로깅 설정
 logging.basicConfig(
@@ -44,6 +45,9 @@ class WebRTCSession:
         # 콜백: PTT_END 시 WAV 데이터를 처리하는 함수 (외부에서 설정)
         self.on_ptt_audio = None  # async def callback(wav_bytes: bytes)
 
+        # 면접 세션 (DataChannel 연결 시 초기화)
+        self._interview: InterviewSession | None = None
+
     # ── DataChannel ─────────────────────────────────
 
     def _on_datachannel(self, channel) -> None:
@@ -51,6 +55,10 @@ class WebRTCSession:
         self._dc = channel
         self._dc.on("message", self._on_dc_message)
         self._dc.on("close", self._on_dc_close)
+
+        # 면접 세션 시작
+        loop = asyncio.get_event_loop()
+        asyncio.ensure_future(self._start_interview(), loop=loop)
 
     def _on_dc_message(self, message) -> None:
         try:
@@ -103,14 +111,59 @@ class WebRTCSession:
         asyncio.ensure_future(self._process_stt(wav_bytes), loop=loop)
 
     async def _process_stt(self, wav_bytes: bytes) -> None:
-        """WAV → Whisper STT → DataChannel로 결과 전송"""
+        """WAV → Whisper STT → DataChannel로 결과 전송 → LLM 면접관"""
         text = await stt_transcribe(wav_bytes)
         self.send_dc({"type": "USER_STT", "text": text})
         logger.info(f"[STT→DC] USER_STT 전송: {text[:80]}...")
 
-        # 외부 콜백이 있으면 호출 (LLM 등 후속 처리용)
+        # 면접 세션이 있으면 LLM으로 다음 질문 생성
+        if self._interview and not self._interview.finished:
+            await self._handle_interview_answer(text)
+
+        # 외부 콜백이 있으면 호출
         if self.on_ptt_audio:
             await self.on_ptt_audio(text)
+
+    # ── 면접 세션 관리 ────────────────────────────────
+
+    async def _start_interview(self, persona: str = "FORMAL", max_questions: int = 8) -> None:
+        """면접 세션 초기화 + 첫 질문 전송"""
+        self._interview = InterviewSession(persona=persona, max_questions=max_questions)
+
+        try:
+            result = await self._interview.generate_first_question()
+            self.send_dc({
+                "type": "AI_QUESTION",
+                "text": result["text"],
+                "expression": result["expression"],
+                "questionNumber": self._interview.question_count,
+                "totalQuestions": self._interview.max_questions,
+            })
+        except Exception as e:
+            logger.error(f"[Interview] 첫 질문 생성 실패: {e}")
+            self.send_dc({"type": "AI_ERROR", "message": "면접 시작에 실패했습니다."})
+
+    async def _handle_interview_answer(self, user_text: str) -> None:
+        """사용자 답변 → LLM → 다음 질문 또는 종료"""
+        try:
+            result = await self._interview.process_answer(user_text)
+            if result["finished"]:
+                self.send_dc({
+                    "type": "INTERVIEW_END",
+                    "text": result["text"],
+                    "expression": result["expression"],
+                })
+            else:
+                self.send_dc({
+                    "type": "AI_QUESTION",
+                    "text": result["text"],
+                    "expression": result["expression"],
+                    "questionNumber": self._interview.question_count,
+                    "totalQuestions": self._interview.max_questions,
+                })
+        except Exception as e:
+            logger.error(f"[Interview] 질문 생성 실패: {e}")
+            self.send_dc({"type": "AI_ERROR", "message": "질문 생성에 실패했습니다."})
 
     def _frames_to_wav(self) -> bytes:
         """누적된 오디오 프레임을 WAV 바이트로 변환"""
@@ -206,6 +259,7 @@ class WebRTCSession:
         self._ptt_active = False
         self._audio_frames.clear()
         self._audio_buffer_size = 0
+        self._interview = None
         if self._dc:
             try:
                 self._dc.close()
