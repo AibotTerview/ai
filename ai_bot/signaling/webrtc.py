@@ -12,6 +12,7 @@ from ..stt import transcribe as stt_transcribe
 from ..tts import synthesize as tts_synthesize
 from ..interviewer import InterviewSession
 from ..audio_track import TTSAudioTrack
+from ..signals import answer_submitted
 
 # 로깅 설정
 logging.basicConfig(
@@ -225,7 +226,34 @@ class WebRTCSession:
             self.send_dc({"type": "AI_ERROR", "message": "면접 시작에 실패했습니다."})
 
     async def _handle_interview_answer(self, user_text: str) -> None:
-        """사용자 답변 → LLM → 다음 질문 + TTS 또는 종료"""
+        """사용자 답변 → LLM → 다음 질문 또는 종료"""
+        # [NEW] 답변 제출 시그널 발송
+        try:
+            last_question = ""
+            if self._interview and self._interview.history:
+                # history의 마지막이 현재 답변이 들어가기 전이라면, 마지막은 질문일 것임.
+                # 하지만 이 함수는 process_answer 호출 전에 불리거나, process_answer 내부에서 append 함.
+                # InterviewSession 구조상 process_answer 호출 전에는 history에 아직 user_text가 없음.
+                # 따라서 history[-1]은 면접관의 질문임.
+                last_entry = self._interview.history[-1]
+                if last_entry.get('role') == 'interviewer':
+                    last_question = last_entry.get('text', "")
+
+            sequence = self._interview.question_count if self._interview else 0
+            
+            # 발신자(sender)는 None으로 설정
+            answer_submitted.send(
+                sender=None,
+                interview_id=self.room_id,
+                sequence=sequence,
+                question=last_question,
+                answer=user_text
+            )
+            logger.info(f"[Signal] answer_submitted 발송 완료: room={self.room_id}, seq={sequence}")
+
+        except Exception as e:
+            logger.error(f"[Signal] answer_submitted 발송 실패: {e}")
+
         try:
             result = await self._interview.process_answer(user_text)
             if result["finished"]:
