@@ -31,7 +31,7 @@ class InterviewQuestion(models.Model):
     question = models.TextField()
     answer = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(blank=True, null=True)
-    elapsed_time = models.BigIntegerField(blank=True, null=True)
+    feedback = models.TextField()
 
     class Meta:
         managed = False
