@@ -2,7 +2,7 @@ Django>=6.0,<6.11
 gunicorn>=23.0,<24.0
 PyMySQL>=1.1,<2.0
 
-websocket-client
+websockets
 aiortc
 djangorestframework
 boto3

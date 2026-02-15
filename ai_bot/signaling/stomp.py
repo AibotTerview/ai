@@ -1,6 +1,5 @@
 import json
 from typing import Any
-from websocket import WebSocket
 
 def frame(command: str, headers: dict[str, Any] | None = None, body: str = "") -> str:
     lines = [command]
@@ -10,17 +9,17 @@ def frame(command: str, headers: dict[str, Any] | None = None, body: str = "") -
     lines.append(body)
     return "\n".join(lines) + "\x00"
 
-def send(ws: WebSocket, destination: str, data: dict) -> None:
+async def send(ws, destination: str, data: dict) -> None:
     body = json.dumps(data)
-    ws.send(frame("SEND", {
+    await ws.send(frame("SEND", {
         "destination": destination,
         "content-type": "application/json",
         "content-length": len(body),
     }, body))
 
 
-def subscribe(ws: WebSocket, destination: str, sub_id: str) -> None:
-    ws.send(frame("SUBSCRIBE", {
+async def subscribe(ws, destination: str, sub_id: str) -> None:
+    await ws.send(frame("SUBSCRIBE", {
         "id": sub_id,
         "destination": destination,
     }))

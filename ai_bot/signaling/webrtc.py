@@ -3,7 +3,6 @@ import logging
 import asyncio
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 from aiortc.mediastreams import MediaStreamTrack
-from websocket import WebSocket
 from . import stomp
 from .datachannel import DataChannelMixin
 from .ptt import PTTMixin, MAX_AUDIO_BUFFER_BYTES, PTT_MAX_RECORDING_DURATION
@@ -14,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
-    def __init__(self, room_id: str, stomp_ws: WebSocket) -> None:
+    def __init__(self, room_id: str, stomp_ws) -> None:
         self.room_id = room_id
         self.stomp_ws = stomp_ws
         self.peer = RTCPeerConnection()
@@ -52,24 +51,28 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         self._interview_timer: asyncio.TimerHandle | None = None
         self._ptt_timeout_timer: asyncio.TimerHandle | None = None
         self._ptt_recording_start: float = 0.0
+        self.closed = asyncio.Event()
 
     # ── ICE ──────────────────────────────────────────
 
     def _on_ice_candidate(self, candidate) -> None:
         logger.info(f"[ICE 이벤트] icecandidate 발생: {candidate}")
         if candidate:
-            try:
-                stomp.send(self.stomp_ws, "/app/signal/webrtc/ice", {
-                    "type": "ICE_CANDIDATE",
-                    "roomId": self.room_id,
-                    "payload": {
-                        "candidate": f"candidate:{candidate.foundation} {candidate.component} {candidate.protocol} {candidate.priority} {candidate.host} {candidate.port} typ {candidate.type}",
-                        "sdpMid": getattr(candidate, 'sdpMid', '0'),
-                        "sdpMLineIndex": getattr(candidate, 'sdpMLineIndex', 0),
-                    },
-                })
-            except Exception as e:
-                logger.error(f"[ICE 이벤트] 전송 실패: {e}")
+            asyncio.ensure_future(self._send_ice_candidate(candidate))
+
+    async def _send_ice_candidate(self, candidate) -> None:
+        try:
+            await stomp.send(self.stomp_ws, "/app/signal/webrtc/ice", {
+                "type": "ICE_CANDIDATE",
+                "roomId": self.room_id,
+                "payload": {
+                    "candidate": f"candidate:{candidate.foundation} {candidate.component} {candidate.protocol} {candidate.priority} {candidate.host} {candidate.port} typ {candidate.type}",
+                    "sdpMid": getattr(candidate, 'sdpMid', '0'),
+                    "sdpMLineIndex": getattr(candidate, 'sdpMLineIndex', 0),
+                },
+            })
+        except Exception as e:
+            logger.error(f"[ICE 이벤트] 전송 실패: {e}")
 
     async def _send_local_candidates(self) -> None:
         """ICE gathering 완료 후 로컬 후보를 프론트엔드로 STOMP 전송"""
@@ -115,7 +118,7 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
                 if getattr(c, 'related_address', None):
                     candidate_str += f" raddr {c.related_address} rport {c.related_port}"
 
-                stomp.send(self.stomp_ws, "/app/signal/webrtc/ice", {
+                await stomp.send(self.stomp_ws, "/app/signal/webrtc/ice", {
                     "type": "ICE_CANDIDATE",
                     "roomId": self.room_id,
                     "payload": {
@@ -170,10 +173,7 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         state = self.peer.connectionState
         logger.info(f"[연결 상태] {state}")
         if state == "connected":
-            try:
-                self.stomp_ws.close()
-            except Exception:
-                pass
+            asyncio.ensure_future(self.stomp_ws.close())
         elif state in ("failed", "closed"):
             from . import remove_session
             remove_session(self.room_id)
@@ -215,7 +215,7 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         logger.info(f"[ICE] Gathering state: {self.peer.iceGatheringState}")
 
         # Answer 전송
-        stomp.send(self.stomp_ws, "/app/signal/webrtc/answer", {
+        await stomp.send(self.stomp_ws, "/app/signal/webrtc/answer", {
             "type": "WEBRTC_ANSWER",
             "roomId": self.room_id,
             "payload": {"sdp": self.peer.localDescription.sdp, "type": self.peer.localDescription.type},
@@ -293,6 +293,8 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         # GC 강제 실행
         gc.collect()
         logger.info(f"[세션 정리 완료] room={self.room_id}")
+
+        self.closed.set()
 
 
 def _parse_candidate(candidate_str: str) -> RTCIceCandidate:

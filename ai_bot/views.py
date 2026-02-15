@@ -27,5 +27,7 @@ def notify(request):
         created_at=timezone.now(),
     )
 
-    signaling.start(room_id) # 시작
-    return JsonResponse({"status": "ok"})
+    if signaling.start(room_id):
+        return JsonResponse({"status": "ok"})
+
+    return JsonResponse({"error": "서버 오류가 발생했습니다."}, status=500)
