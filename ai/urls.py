@@ -2,7 +2,7 @@
 from django.contrib import admin
 from django.urls import path
 
-from ai_bot.views import notify
+from interview.views import notify
 
 urlpatterns = [
     path('admin/', admin.site.urls),
