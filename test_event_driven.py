@@ -101,9 +101,7 @@ def run_test():
     
     for q_obj in questions_db:
         print(f"[Test] Question: {q_obj.question}")
-        # text slicing to avoid errors if None
-        feedback_preview = (q_obj.feedback or "")[:50] 
-        print(f"[Test] Feedback: {feedback_preview}...")
+        # feedback은 DB 컬럼 없음 — Evaluator._context_storage에만 유지
 
 if __name__ == "__main__":
     run_test()

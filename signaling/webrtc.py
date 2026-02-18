@@ -56,11 +56,12 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
     # ── ICE ──────────────────────────────────────────
 
     def _on_ice_candidate(self, candidate) -> None:
-        logger.info(f"[ICE 이벤트] icecandidate 발생: {candidate}")
+        """ICE 후보 발생 시 STOMP로 전송"""
         if candidate:
             asyncio.ensure_future(self._send_ice_candidate(candidate))
 
     async def _send_ice_candidate(self, candidate) -> None:
+        """ICE 후보를 STOMP로 전송"""
         try:
             await stomp.send(self.stomp_ws, "/app/signal/webrtc/ice", {
                 "type": "ICE_CANDIDATE",
@@ -74,68 +75,10 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         except Exception as e:
             logger.error(f"[ICE 이벤트] 전송 실패: {e}")
 
-    async def _send_local_candidates(self) -> None:
-        """ICE gathering 완료 후 로컬 후보를 프론트엔드로 STOMP 전송"""
-        try:
-            ice_connection = None
-            mid = "0"
-
-            # BUNDLE 정책: 첫 번째 transceiver의 ICE transport에서 추출
-            for transceiver in getattr(self.peer, '_transceivers', []):
-                dtls = getattr(transceiver, '_transport', None)
-                if dtls is None:
-                    continue
-                ice = getattr(dtls, 'transport', None)
-                if ice is None:
-                    continue
-                ice_connection = getattr(ice, '_connection', None)
-                mid = getattr(transceiver, 'mid', '0') or '0'
-                if ice_connection:
-                    break
-
-            # SCTP transport에서도 시도
-            if not ice_connection:
-                sctp = getattr(self.peer, '_sctpTransport', None)
-                if sctp:
-                    dtls = getattr(sctp, '_dtls_transport', None) or getattr(sctp, 'transport', None)
-                    if dtls:
-                        ice = getattr(dtls, 'transport', None)
-                        if ice:
-                            ice_connection = getattr(ice, '_connection', None)
-
-            if not ice_connection:
-                logger.warning("[ICE 전송] ICE connection을 찾을 수 없음")
-                return
-
-            candidates = getattr(ice_connection, 'local_candidates', [])
-            logger.info(f"[ICE 전송] 로컬 후보 {len(candidates)}개 발견")
-
-            for c in candidates:
-                candidate_str = (
-                    f"candidate:{c.foundation} {c.component} {c.protocol} "
-                    f"{c.priority} {c.host} {c.port} typ {c.type}"
-                )
-                if getattr(c, 'related_address', None):
-                    candidate_str += f" raddr {c.related_address} rport {c.related_port}"
-
-                await stomp.send(self.stomp_ws, "/app/signal/webrtc/ice", {
-                    "type": "ICE_CANDIDATE",
-                    "roomId": self.room_id,
-                    "payload": {
-                        "candidate": candidate_str,
-                        "sdpMid": mid,
-                        "sdpMLineIndex": 0,
-                    },
-                })
-                logger.info(f"[ICE 전송] {candidate_str}")
-        except Exception as e:
-            logger.error(f"[ICE 전송 실패] {e}", exc_info=True)
-
     # ── Track 수신 (오디오/비디오) ───────────────────
 
     async def _on_track(self, track: MediaStreamTrack) -> None:
-        logger.info(f"[TRACK 수신] kind={track.kind}, id={track.id}")
-
+        """오디오 트랙 수신 및 PTT 버퍼링"""
         if track.kind != "audio":
             return
 
@@ -150,10 +93,9 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
 
             # PTT 활성 시에만 버퍼에 저장
             if self._ptt_active:
-                # PTT 최대 녹음 시간 초과 시 자동 종료
+                # 최대 녹음 시간 초과 시 자동 종료
                 elapsed = asyncio.get_event_loop().time() - self._ptt_recording_start
                 if elapsed >= PTT_MAX_RECORDING_DURATION:
-                    logger.warning(f"[PTT] 최대 녹음 시간({PTT_MAX_RECORDING_DURATION}초) 초과, 자동 종료")
                     self.send_dc({"type": "PTT_TIMEOUT"})
                     self._stop_recording()
                     continue
@@ -162,16 +104,12 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
                 if self._audio_buffer_size + len(raw) <= MAX_AUDIO_BUFFER_BYTES:
                     self._audio_frames.append(raw)
                     self._audio_buffer_size += len(raw)
-                else:
-                    logger.warning("[PTT] 오디오 버퍼 최대 크기 초과, 프레임 무시")
-
-        logger.info(f"[TRACK 종료] kind={track.kind}")
 
     # ── 연결 상태 ────────────────────────────────────
 
     def _on_connection_state_change(self) -> None:
+        """연결 상태 변경 처리"""
         state = self.peer.connectionState
-        logger.info(f"[연결 상태] {state}")
         if state == "connected":
             asyncio.ensure_future(self.stomp_ws.close())
         elif state in ("failed", "closed"):
@@ -181,53 +119,44 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
     # ── SDP 핸들링 ───────────────────────────────────
 
     async def handle_offer(self, payload: dict) -> None:
+        """WebRTC Offer 처리 및 Answer 생성"""
         offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
         await self.peer.setRemoteDescription(offer)
-        logger.info("[SDP] Remote description 설정 완료")
 
         # 버퍼링된 ICE 후보 처리
         self._remote_desc_set = True
-        if self._pending_remote_ice:
-            logger.info(f"[ICE] 버퍼링된 후보 {len(self._pending_remote_ice)}개 처리")
-            for ice_payload in self._pending_remote_ice:
-                try:
-                    candidate = _parse_candidate(ice_payload["candidate"])
-                    candidate.sdpMid = ice_payload.get("sdpMid")
-                    candidate.sdpMLineIndex = ice_payload.get("sdpMLineIndex")
-                    await self.peer.addIceCandidate(candidate)
-                    logger.info(f"[ICE] 버퍼링 후보 추가: {ice_payload['candidate'][:60]}")
-                except Exception as e:
-                    logger.error(f"[ICE] 버퍼링 후보 추가 실패: {e}")
-            self._pending_remote_ice.clear()
+        for ice_payload in self._pending_remote_ice:
+            try:
+                candidate = _parse_candidate(ice_payload["candidate"])
+                candidate.sdpMid = ice_payload.get("sdpMid")
+                candidate.sdpMLineIndex = ice_payload.get("sdpMLineIndex")
+                await self.peer.addIceCandidate(candidate)
+            except Exception as e:
+                logger.error(f"[ICE] 버퍼링 후보 추가 실패: {e}")
+        self._pending_remote_ice.clear()
 
-        # TTS 오디오 트랙 추가 (answer 생성 전에 추가해야 SDP에 포함)
+        # TTS 오디오 트랙 추가
         self.peer.addTrack(self._tts_track)
 
+        # Answer 생성 및 전송
         answer = await self.peer.createAnswer()
         await self.peer.setLocalDescription(answer)
-        logger.info("[SDP] Local description(answer) 설정 완료")
 
         # ICE gathering 완료 대기 (최대 10초)
         for _ in range(200):
             if self.peer.iceGatheringState == "complete":
                 break
             await asyncio.sleep(0.05)
-        logger.info(f"[ICE] Gathering state: {self.peer.iceGatheringState}")
 
-        # Answer 전송
         await stomp.send(self.stomp_ws, "/app/signal/webrtc/answer", {
             "type": "WEBRTC_ANSWER",
             "roomId": self.room_id,
             "payload": {"sdp": self.peer.localDescription.sdp, "type": self.peer.localDescription.type},
         })
-        logger.info("[SDP] Answer 전송 완료")
-
-        # AI 서버의 ICE 후보를 프론트엔드로 전송
-        await self._send_local_candidates()
 
     async def handle_ice(self, payload: dict) -> None:
+        """원격 ICE 후보 처리"""
         if not self._remote_desc_set:
-            logger.info("[ICE] Remote description 미설정 — 후보 버퍼링")
             self._pending_remote_ice.append(payload)
             return
 
@@ -236,26 +165,22 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
             candidate.sdpMid = payload.get("sdpMid")
             candidate.sdpMLineIndex = payload.get("sdpMLineIndex")
             await self.peer.addIceCandidate(candidate)
-            logger.info(f"[ICE] 원격 후보 추가: {payload['candidate'][:60]}")
         except Exception as e:
             logger.error(f"[ICE] 원격 후보 추가 실패: {e}")
 
     # ── 리소스 정리 ──────────────────────────────────
 
     def cleanup(self) -> None:
+        """세션 리소스 정리"""
         if self._cleaned_up:
             return
         self._cleaned_up = True
 
-        logger.info(f"[세션 정리] room={self.room_id}")
-
         # 타이머 취소
         if self._interview_timer:
             self._interview_timer.cancel()
-            self._interview_timer = None
         if self._ptt_timeout_timer:
             self._ptt_timeout_timer.cancel()
-            self._ptt_timeout_timer = None
 
         # 오디오 버퍼 정리
         self._ptt_active = False
@@ -290,10 +215,7 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
                 logger.warning(f"[세션 정리] peer close 실패: {e}")
             self.peer = None
 
-        # GC 강제 실행
         gc.collect()
-        logger.info(f"[세션 정리 완료] room={self.room_id}")
-
         self.closed.set()
 
 

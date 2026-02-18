@@ -103,14 +103,13 @@ class InterviewEvaluator:
         try:
             interview = Interview.objects.get(interview_id=interview_id)
 
-            # Save Question & Answer & Feedback
+            # Save Question & Answer (DB 테이블에 feedback 컬럼 없음 — 평가는 _context_storage에만 유지)
             InterviewQuestion.objects.create(
                 question_id=str(uuid.uuid4()),
                 interview=interview,
                 question=question,
                 answer=answer,
                 created_at=timezone.now(),
-                feedback=evaluation
             )
 
             logger.info(f"[Evaluator] Saved result to DB for {interview_id}")

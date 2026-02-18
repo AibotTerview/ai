@@ -5,7 +5,6 @@ _SECTION_FILES = ["role.txt", "personality.txt", "rules.txt"]
 
 
 class PersonaService:
-    # step2에서는 기본값도 FORMAL 스타일 면접관으로 사용
     DEFAULT_PERSONA = "FORMAL"
 
     @classmethod
@@ -24,7 +23,7 @@ class PersonaService:
         return "\n\n".join(sections)
 
     @classmethod
-    def get_persona(cls, name: str = None) -> str:
+    def get_persona(cls, name: str | None = None) -> str:
         if name is None:
             name = cls.DEFAULT_PERSONA
         return cls._load_persona(name)

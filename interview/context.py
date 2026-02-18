@@ -1,11 +1,6 @@
-import os
-import django
+"""면접 설정(setting_id) 기반 LLM 컨텍스트 조회."""
 
-if not os.environ.get("DJANGO_SETTINGS_MODULE"):
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "ai.settings")
-    django.setup()
-
-from ai_bot.models import InterviewSetting
+from .models import InterviewSetting
 
 
 class LLMContextService:

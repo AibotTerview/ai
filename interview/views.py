@@ -16,6 +16,9 @@ def notify(request):
     body = json.loads(request.body.decode('utf-8'))
     serializer = NotifyRequestSerializer(data=body)
 
+    if not serializer.is_valid():
+        return JsonResponse(serializer.errors, status=400)
+
     room_id = serializer.validated_data["roomId"]
     setting_id = room_id
 
