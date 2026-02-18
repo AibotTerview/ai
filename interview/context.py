@@ -22,9 +22,7 @@ class LLMContextService:
         for setting_skill in setting.settingskill_set.all():
             skill_names.append(setting_skill.skill.skill)
 
-        pre_questions:List[str] = []
-        for setting_question in setting.prequestion_set.all():
-            pre_questions.append(setting_question.question)
+        pre_questions = list(setting.prequestion_set.all())
 
         lines: List[str] = []
 

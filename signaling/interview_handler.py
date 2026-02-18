@@ -1,9 +1,10 @@
 import asyncio
 
+from asgiref.sync import sync_to_async
 from interview.interviewer import InterviewSession
+from interview.models import InterviewSetting
 from speech.tts import synthesize as tts_synthesize
 from interview.signals import answer_submitted
-from signaling.session import remove_session
 
 INTERVIEW_MAX_DURATION = 30 * 60 # 30분
 PTT_NO_RESPONSE_TIMEOUT = 2 * 60 # 2분
@@ -27,15 +28,23 @@ class InterviewMixin:
     def _on_interview_timeout(self) -> None:
         # datachannel.py에 있음
         self.send_dc({"type": "INTERVIEW_END", "text": "면접 시간이 초과되어 자동 종료됩니다.", "expression": "neutral"})
+        from signaling.session import remove_session
         remove_session(self.room_id)
 
     # PTT 타이머 초과 할 때의 처리
     def _on_ptt_timeout(self) -> None:
         self.send_dc({"type": "AI_ERROR", "message": "응답이 없어 면접이 종료됩니다."})
+        from signaling.session import remove_session
         remove_session(self.room_id)
 
-    async def _start_interview(self, persona: str = "FORMAL", max_questions: int = 5) -> None:
-        self._interview = InterviewSession(persona=persona, max_questions=max_questions)
+    async def _start_interview(self) -> None:
+        setting: InterviewSetting = await sync_to_async(InterviewSetting.objects.get)(setting_id=self.room_id)
+        persona = setting.interviewer_style
+        max_questions = setting.question_count
+        self._gender = setting.interviewer_gender.lower()
+
+        self._interview = InterviewSession(persona=persona, max_questions=max_questions, setting_id=self.room_id)
+        await self._interview.async_setup()
 
         result = await self._interview.generate_first_question()
 

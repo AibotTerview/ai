@@ -3,6 +3,7 @@ import asyncio
 from typing import List, Dict
 import google.generativeai as genai
 from django.conf import settings
+from asgiref.sync import sync_to_async
 
 from interview.personas import PersonaService
 from interview.context import LLMContextService
@@ -65,7 +66,10 @@ class InterviewSession:
         self.question_count = 0
         self.history: List[Dict[str, str]] = []
         self.finished = False
-        self._setting_context = LLMContextService.get_setting_context(setting_id)
+        self._setting_context: str = ""
+
+    async def async_setup(self) -> None:
+        self._setting_context = await sync_to_async(LLMContextService.get_setting_context)(self.setting_id)
 
     def add_question(self, text: str) -> None:
         self.history.append({"role": "interviewer", "text": text})
