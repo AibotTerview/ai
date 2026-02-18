@@ -1,49 +1,52 @@
-"""면접 설정(setting_id) 기반 LLM 컨텍스트 조회."""
+from typing import List
 
 from .models import InterviewSetting
 
-
+""" 
+    setting_id를 기반으로 DB 테이블의 데이터를 가져옴
+    setting, skill_name, pre_questions 테이블에서 데이터를 가져온 후 LLM에게 넘겨주기 위해 
+    String 데이터 생성
+    -정기주- 
+"""
 class LLMContextService:
-
     @staticmethod
     def get_setting_context(setting_id: str) -> str:
-        setting = (
-            InterviewSetting.objects
-            .prefetch_related("settingskill_set__skill", "prequestion_set")
-            .get(setting_id=setting_id)
+
+        queryset = InterviewSetting.objects.prefetch_related(
+            "settingskill_set__skill",
+            "prequestion_set",
         )
+        setting: InterviewSetting = queryset.get(setting_id=setting_id)
 
-        skills = [
-            ss.skill.skill
-            for ss in setting.settingskill_set.all()
-        ]
+        skill_names: List[str] = []
+        for setting_skill in setting.settingskill_set.all():
+            skill_names.append(setting_skill.skill.skill)
 
-        pre_questions = setting.prequestion_set.all().order_by("pre_question_id")
+        pre_questions:List[str] = []
+        for setting_question in setting.prequestion_set.all():
+            pre_questions.append(setting_question.question)
 
-        lines = [
-            "[InterviewSetting]",
-            f"- setting_id: {setting.setting_id}",
-            f"- question_count: {setting.question_count}",
-            f"- interviewer_style: {setting.interviewer_style}",
-            f"- interviewer_gender: {setting.interviewer_gender}",
-            f"- interviewer_appearance: {setting.interviewer_appearance}",
-            f"- position: {setting.position or '(없음)'}",
-            f"- resume_uri: {setting.resume_uri or '(없음)'}",
-            "",
-            "[Skill]",
-        ]
+        lines: List[str] = []
 
-        if skills:
-            lines.extend([f"- {s}" for s in skills])
-        else:
-            lines.append("- (없음)")
-
+        lines.append("[InterviewSetting]")
+        lines.append(f"- setting_id: {setting.setting_id}")
+        lines.append(f"- question_count: {setting.question_count}")
+        lines.append(f"- interviewer_style: {setting.interviewer_style}")
+        lines.append(f"- interviewer_gender: {setting.interviewer_gender}")
+        lines.append(f"- interviewer_appearance: {setting.interviewer_appearance}")
+        lines.append(f"- position: {setting.position or '(없음)'}")
+        lines.append(f"- resume_uri: {setting.resume_uri or '(없음)'}")
         lines.append("")
-        lines.append("[PreQuestion]")
 
-        for pq in pre_questions:
-            lines.append(f"Q: {pq.question}")
-            lines.append(f"A: {pq.answer}")
+        lines.append("[Skill]")
+        for name in skill_names:
+            lines.append(f"- {name}")
+        lines.append("")
+
+        lines.append("[PreQuestion]")
+        for pre_question in pre_questions:
+            lines.append(f"Q: {pre_question.question}")
+            lines.append(f"A: {pre_question.answer}")
             lines.append("")
 
         return "\n".join(lines).strip()

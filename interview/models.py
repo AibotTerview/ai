@@ -49,7 +49,6 @@ class InterviewScore(models.Model):
         managed = False
         db_table = 'interview_score'
 
-
 class InterviewSetting(models.Model):
     setting_id = models.CharField(primary_key=True, max_length=36)
     user = models.ForeignKey('User', models.DO_NOTHING)
