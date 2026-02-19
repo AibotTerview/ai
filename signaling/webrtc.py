@@ -63,6 +63,8 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
                     self._audio_buffer_size += len(raw)
 
     def _on_connection_state_change(self) -> None:
+        if self.peer is None:
+            return
         state = self.peer.connectionState
         if state == "connected":
             asyncio.ensure_future(self.stomp_ws.close())

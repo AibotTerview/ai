@@ -20,7 +20,11 @@ LLM_RESPONSE_JSON_SCHEMA = {
             "type": "string",
             "description": "유저의 이전 답변 (그대로 복사)",
             "nullable": True
+        },
+        "is_followup": {
+            "type": "boolean",
+            "description": "이전 답변이 모호하거나 구체성이 부족해 꼬리질문이 필요하면 True, 새 주제 질문이면 False"
         }
     },
-    "required": ["sequence", "next_question", "face"]
+    "required": ["sequence", "next_question", "face", "is_followup"]
 }

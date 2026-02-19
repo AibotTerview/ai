@@ -59,11 +59,14 @@ async def call_gemini_json(system_prompt: str, messages: List[Dict[str, str]]) -
 
 
 class InterviewSession:
+    MAX_FOLLOWUPS_PER_QUESTION = 3
+
     def __init__(self, persona: str = "FORMAL", max_questions: int = 5, setting_id: str | None = None) -> None:
         self.persona = persona.upper()
         self.max_questions = max_questions
         self.setting_id = setting_id
         self.question_count = 0
+        self.followup_count = 0       # 현재 질문에 대한 꼬리질문 누적 횟수
         self.history: List[Dict[str, str]] = []
         self.finished = False
         self._setting_context: str = ""
@@ -83,12 +86,18 @@ class InterviewSession:
 
     def _build_system_prompt(self) -> str:
         persona_text = PersonaService.get_persona(self.persona)
+        followup_remaining = self.MAX_FOLLOWUPS_PER_QUESTION - self.followup_count
         return (
             f"{persona_text}\n\n"
             "면접 진행 규칙:\n"
             "- 한 번에 하나의 질문만 합니다.\n"
             "- 질문은 간결하게 1~3문장으로 합니다.\n"
-            f"- 현재 {self.question_count}/{self.max_questions}번째 질문입니다.\n\n"
+            f"- 현재 {self.question_count}/{self.max_questions}번째 질문입니다.\n"
+            f"- 현재 질문에 대한 꼬리질문 가능 횟수: {followup_remaining}회\n"
+            "- 꼬리질문 규칙:\n"
+            "  - 지원자의 답변이 모호하거나 구체성이 부족하면 is_followup=true로 꼬리질문을 합니다.\n"
+            "  - 꼬리질문 가능 횟수가 0이면 반드시 is_followup=false로 새 주제 질문을 합니다.\n"
+            "  - 답변이 충분히 구체적이면 is_followup=false로 새 주제 질문을 합니다.\n\n"
             "[면접 설정 정보 (아래 내용을 참고해서 질문을 생성해)]\n"
             f"{self._setting_context}"
         )
@@ -111,6 +120,12 @@ class InterviewSession:
         self.add_question(result["text"])
         return result
 
+    def _can_followup(self) -> bool:
+        """꼬리질문 가능 여부: 꼬리질문 횟수 제한 & 전체 질문 한계치 미달"""
+        followup_not_exhausted = self.followup_count < self.MAX_FOLLOWUPS_PER_QUESTION
+        total_not_exceeded = self.question_count < self.max_questions
+        return followup_not_exhausted and total_not_exceeded
+
     async def process_answer(self, user_text: str) -> Dict:
         self.add_answer(user_text)
 
@@ -126,24 +141,45 @@ class InterviewSession:
 
         # 시스템 프롬프트 구성
         system_prompt = self._build_system_prompt()
-        if len(analysis_hints) > 0:
-            hints_text = "\n".join(analysis_hints)
-            system_prompt += "\n\n분석 참고:\n" + hints_text
+        if analysis_hints:
+            system_prompt += "\n\n분석 참고:\n" + "\n".join(analysis_hints)
 
         # 히스토리를 메시지 형식으로 변환
         messages: List[Dict[str, str]] = []
         for entry in self.history:
             messages.append({"role": entry["role"], "text": entry["text"]})
-        
-        # 다음 질문 요청 추가
-        messages.append({
-            "role": "user",
-            "text": f"위 답변을 바탕으로 다음 면접 질문을 해 주세요.\n\n현재 질문 순서: {self.question_count + 1}번째",
-        })
+
+        # 꼬리질문 가능 여부를 프롬프트에 명시
+        if self._can_followup():
+            next_instruction = (
+                f"위 답변을 바탕으로 꼬리질문이 필요하면 is_followup=true, "
+                f"새 주제면 is_followup=false로 다음 질문을 해 주세요.\n\n"
+                f"현재 질문 순서: {self.question_count + 1}번째"
+            )
+        else:
+            next_instruction = (
+                f"꼬리질문 없이 새로운 주제로 다음 면접 질문을 해 주세요. is_followup=false.\n\n"
+                f"현재 질문 순서: {self.question_count + 1}번째"
+            )
+
+        messages.append({"role": "user", "text": next_instruction})
 
         data = await call_gemini_json(system_prompt, messages)
+
+        is_followup = data.get("is_followup", False) and self._can_followup()
+
         result = self._json_to_result(data, finished=False)
-        self.add_question(result["text"])
+
+        if is_followup:
+            # 꼬리질문: question_count는 유지, followup_count만 증가
+            self.followup_count += 1
+            result["text"] = f"[꼬리질문] {result['text']}"
+            self.history.append({"role": "interviewer", "text": result["text"]})
+        else:
+            # 새 주제 질문: question_count 증가, followup_count 리셋
+            self.followup_count = 0
+            self.add_question(result["text"])
+
         return result
 
     async def _generate_closing(self) -> Dict:
