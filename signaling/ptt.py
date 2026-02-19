@@ -2,14 +2,12 @@ import io
 import wave
 import asyncio
 
-from speech.stt import stt as stt_transcribe
+from speech.stt import stt
 
 MAX_AUDIO_BUFFER_BYTES = 18 * 1024 * 1024
 PTT_MAX_RECORDING_DURATION = 3 * 60
 
-
 class PTTMixin:
-
     def _start_recording(self) -> None:
         self._ptt_active = True
         self._audio_frames.clear()
@@ -21,15 +19,13 @@ class PTTMixin:
 
     def _stop_recording(self) -> None:
         self._ptt_active = False
-        if not self._audio_frames:
-            return
         wav_bytes = self._frames_to_wav()
         self._audio_frames.clear()
         self._audio_buffer_size = 0
         asyncio.ensure_future(self._process_stt(wav_bytes))
 
     async def _process_stt(self, wav_bytes: bytes) -> None:
-        text = await stt_transcribe(wav_bytes)
+        text = await stt(wav_bytes)
         self.send_dc({"type": "USER_STT", "text": text})
         if self._interview and not self._interview.finished:
             await self._handle_interview_answer(text)

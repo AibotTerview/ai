@@ -10,7 +10,6 @@ from speech.audio_track import TTSAudioTrack
 
 logger = logging.getLogger(__name__)
 
-
 class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
     def __init__(self, room_id: str, stomp_ws) -> None:
         self.room_id = room_id
