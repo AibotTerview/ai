@@ -1,7 +1,8 @@
 import json
 import asyncio
 from typing import List, Dict
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from django.conf import settings
 from asgiref.sync import sync_to_async
 
@@ -11,41 +12,35 @@ from interview.schemas import LLM_RESPONSE_JSON_SCHEMA
 
 
 class GeminiClient:
-    _configured = False
+    _client: genai.Client | None = None
 
     @classmethod
-    def _ensure_configured(self):
-        if not self._configured:
-            genai.configure(api_key=settings.GEMINI_API_KEY)
-            self._configured = True
+    def _get_client(cls) -> genai.Client:
+        if cls._client is None:
+            cls._client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        return cls._client
 
     @staticmethod
-    def _build_contents(messages: List[Dict[str, str]]) -> List[Dict]:
+    def _build_contents(messages: List[Dict[str, str]]) -> List[types.Content]:
         contents = []
         for msg in messages:
-            if msg["role"] == "user":
-                role = "user"
-            else:
-                role = "model"
-            contents.append({"role": role, "parts": [msg["text"]]})
+            role = "user" if msg["role"] == "user" else "model"
+            contents.append(types.Content(role=role, parts=[types.Part(text=msg["text"])]))
         return contents
 
     @classmethod
-    def _call_gemini_json_sync(self, system_prompt: str, messages: List[Dict[str, str]]) -> Dict:
-        self._ensure_configured()
-
-        model = genai.GenerativeModel(
-            "gemini-2.5-flash",
-            system_instruction=system_prompt,
-            generation_config=genai.types.GenerationConfig(
+    def _call_gemini_json_sync(cls, system_prompt: str, messages: List[Dict[str, str]]) -> Dict:
+        client = cls._get_client()
+        contents = cls._build_contents(messages)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
                 response_mime_type="application/json",
                 response_schema=LLM_RESPONSE_JSON_SCHEMA,
             ),
         )
-        
-        contents = self._build_contents(messages)
-        response = model.generate_content(contents)
-        
         return json.loads(response.text)
 
 

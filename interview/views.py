@@ -24,10 +24,13 @@ def notify(request):
 
     setting = InterviewSetting.objects.get(setting_id=setting_id)
 
-    Interview.objects.create(
+    from signaling.session import get_session
+    if get_session(room_id) is not None:
+        return JsonResponse({"error": "이미 진행 중인 인터뷰입니다."}, status=409)
+
+    Interview.objects.get_or_create(
         interview_id=room_id,
-        setting=setting,
-        created_at=timezone.now(),
+        defaults={"setting": setting, "created_at": timezone.now()},
     )
 
     if signaling_start(room_id):
