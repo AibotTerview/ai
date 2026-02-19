@@ -2,15 +2,10 @@ import io
 import json
 import wave
 import base64
-import logging
 import asyncio
 import urllib.request
 from functools import partial
 from django.conf import settings
-
-logger = logging.getLogger(__name__)
-
-# ── 음성 설정 ─────────────────────────────────────────
 
 VOICE_CONFIGS = {
     "male": {
@@ -23,14 +18,8 @@ VOICE_CONFIGS = {
     },
 }
 
-TTS_SAMPLE_RATE = 48000
-
-
-# ── API 호출 ──────────────────────────────────────────
-
-def _synthesize_sync(text: str, gender: str = "male") -> bytes:
-    """Google TTS REST API 호출 → raw PCM bytes 반환"""
-    voice_config = VOICE_CONFIGS.get(gender, VOICE_CONFIGS["male"])
+def _synthesize_sync(text: str, gender: str) -> bytes:
+    voice_config = VOICE_CONFIGS.get(gender)
 
     url = (
         "https://texttospeech.googleapis.com/v1/text:synthesize"
@@ -45,7 +34,7 @@ def _synthesize_sync(text: str, gender: str = "male") -> bytes:
         },
         "audioConfig": {
             "audioEncoding": "LINEAR16",
-            "sampleRateHertz": TTS_SAMPLE_RATE,
+            "sampleRateHertz": 48000,
             "speakingRate": 1.0,
             "pitch": 0,
         },
@@ -54,23 +43,26 @@ def _synthesize_sync(text: str, gender: str = "male") -> bytes:
     req = urllib.request.Request(
         url, data=body, headers={"Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    resp = urllib.request.urlopen(req, timeout=30)
+
+    try:
         result = json.loads(resp.read())
+    finally:
+        resp.close()
 
     wav_data = base64.b64decode(result["audioContent"])
 
-    # WAV 헤더에서 raw PCM 추출
     buf = io.BytesIO(wav_data)
-    with wave.open(buf, "rb") as wf:
+    wf = wave.open(buf, "rb")
+    try:
         pcm_bytes = wf.readframes(wf.getnframes())
+    finally:
+        wf.close()
     buf.close()
 
-    logger.info(f"[TTS] 변환 완료: {len(text)}자 → {len(pcm_bytes)} bytes PCM")
     return pcm_bytes
 
-
-async def synthesize(text: str, gender: str = "male") -> bytes:
-    """비동기 TTS 호출"""
+async def synthesize(text: str, gender: str) -> bytes:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None, partial(_synthesize_sync, text, gender)
