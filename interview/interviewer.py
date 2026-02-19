@@ -166,10 +166,11 @@ class InterviewSession:
         result = self._json_to_result(data, finished=False)
 
         if is_followup:
-            # 꼬리질문: question_count는 유지, followup_count만 증가
+            # 꼬리질문: question_count도 증가, followup_count도 증가
             self.followup_count += 1
             result["text"] = f"[꼬리질문] {result['text']}"
             self.history.append({"role": "interviewer", "text": result["text"]})
+            self.question_count += 1
         else:
             # 새 주제 질문: question_count 증가, followup_count 리셋
             self.followup_count = 0
