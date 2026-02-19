@@ -1,12 +1,18 @@
 import logging
 import asyncio
+import os
+import tempfile
+import time
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 from aiortc.mediastreams import MediaStreamTrack
+from aiortc.contrib.media import MediaRecorder
 from signaling import stomp
 from signaling.datachannel import DataChannelMixin
 from signaling.ptt import PTTMixin, MAX_AUDIO_BUFFER_BYTES, PTT_MAX_RECORDING_DURATION
 from signaling.interview_handler import InterviewMixin
 from speech.audio_track import TTSAudioTrack
+from storage.s3 import upload_file
+from interview.services.result import save_interview_result
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +44,25 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         self._ptt_timeout_timer: asyncio.TimerHandle | None = None
         self._ptt_recording_start: float = 0.0
 
+        self._interview_start_time: float | None = None
+        self._video_recorder: MediaRecorder | None = None
+        self._recording_path: str | None = None
+        self._finalize_done = False
+
         self.closed = asyncio.Event()
 
     async def _on_track(self, track: MediaStreamTrack) -> None:
+        if track.kind == "video":
+            if self._video_recorder is not None:
+                return
+            fd, path = tempfile.mkstemp(suffix=".mp4", prefix=f"recording_{self.room_id}_")
+            os.close(fd)
+            self._recording_path = path
+            self._video_recorder = MediaRecorder(path)
+            self._video_recorder.addTrack(track)
+            await self._video_recorder.start()
+            logger.info("[WebRTC] 비디오 녹화 시작: %s", path)
+            return
         if track.kind != "audio":
             return
         while True:
@@ -104,7 +126,44 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         candidate.sdpMLineIndex = payload.get("sdpMLineIndex")
         await self.peer.addIceCandidate(candidate)
 
+    def _finalize_recording_and_save(self) -> None:
+        """녹화 중지 → S3 업로드 → 로컬 삭제 → DB 저장. cleanup()에서 한 번만 호출."""
+        if self._finalize_done:
+            return
+        self._finalize_done = True
+
+        recorder = self._video_recorder
+        path = self._recording_path
+        self._video_recorder = None
+        self._recording_path = None
+
+        if recorder is not None:
+            try:
+                loop = asyncio.new_event_loop()
+                loop.run_until_complete(recorder.stop())
+                loop.close()
+            except Exception as e:
+                logger.exception("[WebRTC] 녹화 중지 실패: %s", e)
+
+        duration = 0.0
+        if self._interview_start_time is not None:
+            duration = max(0.0, time.time() - self._interview_start_time)
+
+        video_url = ""
+        if path and os.path.isfile(path):
+            key = f"interviews/{self.room_id}/recording_{int(time.time())}.mp4"
+            video_url = upload_file(path, key) or ""
+            try:
+                os.remove(path)
+            except OSError as e:
+                logger.warning("[WebRTC] 로컬 파일 삭제 실패: %s", e)
+            if video_url:
+                save_interview_result(self.room_id, video_url, "", duration)
+                logger.info("[WebRTC] 인터뷰 결과 저장 완료: room_id=%s duration=%.1fs", self.room_id, duration)
+
     def cleanup(self) -> None:
+        self._finalize_recording_and_save()
+
         if self._interview_timer:
             self._interview_timer.cancel()
         if self._ptt_timeout_timer:

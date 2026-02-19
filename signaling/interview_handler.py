@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from asgiref.sync import sync_to_async
 from interview.interviewer import InterviewSession
@@ -38,6 +39,8 @@ class InterviewMixin:
         remove_session(self.room_id)
 
     async def _start_interview(self) -> None:
+        if getattr(self, "_interview_start_time", None) is None:
+            self._interview_start_time = time.time()
         setting: InterviewSetting = await sync_to_async(InterviewSetting.objects.get)(setting_id=self.room_id)
         persona = setting.interviewer_style
         max_questions = setting.question_count
