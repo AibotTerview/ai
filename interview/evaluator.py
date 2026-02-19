@@ -58,9 +58,9 @@ class InterviewEvaluator:
         )
         evaluation = response.text
         current_entry['evaluation'] = evaluation
-        self._save_to_db(interview_id, sequence, question, answer, evaluation)
+        self._save_to_db(interview_id, sequence ,question, answer, evaluation)
 
-    def _construct_prompt(self, history, current_question, current_answer):
+    def _construct_prompt(self, history,current_question, current_answer):
         instruction = _get_evaluator_prompt_template()
 
         if history:
@@ -77,7 +77,7 @@ class InterviewEvaluator:
         prompt += "Evaluation (in Korean):"
         return prompt
 
-    def _save_to_db(self, interview_id, question, answer, evaluation):
+    def _save_to_db(self, interview_id, sequence, question, answer, evaluation):
         interview = Interview.objects.get(interview_id=interview_id)
 
         InterviewQuestion.objects.create(
@@ -85,6 +85,7 @@ class InterviewEvaluator:
             interview=interview,
             question=question,
             answer=answer,
+            sequence=sequence,
             feedback=evaluation,
             created_at=timezone.now(),
         )

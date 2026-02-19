@@ -24,7 +24,6 @@ class InterviewMaterial(models.Model):
         managed = False
         db_table = 'interview_material'
 
-
 class InterviewQuestion(models.Model):
     question_id = models.CharField(primary_key=True, max_length=36)
     interview = models.ForeignKey(Interview, models.DO_NOTHING)
@@ -32,6 +31,7 @@ class InterviewQuestion(models.Model):
     answer = models.TextField(blank=True, null=True)
     feedback = models.TextField(default='')  # AI 평가 결과 저장
     created_at = models.DateTimeField(blank=True, null=True)
+    sequence = models.IntegerField()
 
     class Meta:
         managed = False
