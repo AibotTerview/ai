@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 class InterviewEvaluator:
     _instance = None
-    
+
     # In-memory context storage: { interview_id: [ (sequence, question, answer, evaluation), ... ] }
     _context_storage = {}
 
@@ -38,7 +38,7 @@ class InterviewEvaluator:
         # 0. Initialize Context if needed
         if interview_id not in self._context_storage:
             self._context_storage[interview_id] = []
-            
+
         # 1. Pre-save to Memory (Mark as Pending) to avoid Race Condition
         # We store a mutable dictionary so we can update it later.
         current_entry = {
@@ -50,19 +50,19 @@ class InterviewEvaluator:
         self._context_storage[interview_id].append(current_entry)
 
         # 2. Retrieve Context (excluding current one for prompt construction)
-        # We filter out the current sequence to avoid self-reference in prompt if needed, 
+        # We filter out the current sequence to avoid self-reference in prompt if needed,
         # but logically previous items are what matters.
         history = [entry for entry in self._context_storage.get(interview_id, []) if entry['sequence'] < sequence]
-        
+
         # 3. Construct Prompt
         prompt = self._construct_prompt(history, question, answer)
-        
+
         evaluation = "평가 실패 (API Error)"
         try:
             # 4. Call Gemini API
             # Trying 'gemini-2.5-flash' (Standard Free Tier model)
             response = self.client.models.generate_content(
-                model='gemini-2.5-flash', 
+                model='gemini-2.5-flash',
                 contents=prompt
             )
             evaluation = response.text
@@ -83,17 +83,17 @@ class InterviewEvaluator:
         prompt += "The 'Question' provided is the context or the problem given to the candidate.\n"
         prompt += "The 'Answer' is the candidate's response which you must evaluate.\n"
         prompt += "Do NOT evaluate the quality of the question itself. Focus ONLY on the quality of the answer in response to the question.\n\n"
-        
+
         prompt += "1. Analyze the answer's content, clarity, and relevance.\n"
         prompt += "2. Check for CONSISTENCY with previous answers (Context). Point out any contradictions.\n"
         prompt += "IMPORTANT: You MUST provide the evaluation feedback entirely in Korean (한국어).\n\n"
-        
+
         if history:
             prompt += "--- Previous Conversation (Context) ---\n"
             # We only provide the Q&A history to check consistency, NOT the previous evaluations.
-            for entry in history: 
+            for entry in history:
                 prompt += f"Q: {entry['question']}\nA: {entry['answer']}\n\n"
-        
+
         prompt += f"--- Current Question (Criteria) ---\n{current_question}\n\n"
         prompt += f"--- Candidate's Answer (Target) ---\n{current_answer}\n\n"
         prompt += "Evaluation (in Korean):"
@@ -102,15 +102,14 @@ class InterviewEvaluator:
     def _save_to_db(self, interview_id, sequence, question, answer, evaluation):
         try:
             interview = Interview.objects.get(interview_id=interview_id)
-            
-            # Save Question & Answer & Feedback
+
+            # Save Question & Answer (DB 테이블에 feedback 컬럼 없음 — 평가는 _context_storage에만 유지)
             InterviewQuestion.objects.create(
                 question_id=str(uuid.uuid4()),
                 interview=interview,
                 question=question,
                 answer=answer,
                 created_at=timezone.now(),
-                feedback=evaluation
             )
 
             logger.info(f"[Evaluator] Saved result to DB for {interview_id}")

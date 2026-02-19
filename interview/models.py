@@ -31,7 +31,7 @@ class InterviewQuestion(models.Model):
     question = models.TextField()
     answer = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(blank=True, null=True)
-    feedback = models.TextField()
+    # feedback 컬럼은 DB(interview_question)에 없음 — 평가 결과는 메모리(_context_storage)에만 유지
 
     class Meta:
         managed = False
@@ -48,7 +48,6 @@ class InterviewScore(models.Model):
     class Meta:
         managed = False
         db_table = 'interview_score'
-
 
 class InterviewSetting(models.Model):
     setting_id = models.CharField(primary_key=True, max_length=36)

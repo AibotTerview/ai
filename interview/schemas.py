@@ -1,3 +1,5 @@
+"""LLM JSON 응답 스키마 (Gemini response_schema용)."""
+
 LLM_RESPONSE_JSON_SCHEMA = {
     "type": "object",
     "properties": {
@@ -12,7 +14,6 @@ LLM_RESPONSE_JSON_SCHEMA = {
         "face": {
             "type": "string",
             "description": "3D 캐릭터 표정",
-            #         행복        중립         생각       심각        웃음      호기심          격려
             "enum": ["happy", "neutral", "thinking", "serious", "smile", "curious", "encouraging"]
         },
         "before_user_answer": {
