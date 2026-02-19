@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 _EVALUATOR_PROMPT_PATH = Path(__file__).resolve().parent / "evaluate" / "evaluator_prompt.txt"
 _evaluator_prompt_template: str | None = None
 
-
 def _get_evaluator_prompt_template() -> str:
     global _evaluator_prompt_template
     if _evaluator_prompt_template is None:
@@ -58,9 +57,7 @@ class InterviewEvaluator:
             contents=prompt
         )
         evaluation = response.text
-
         current_entry['evaluation'] = evaluation
-
         self._save_to_db(interview_id, sequence, question, answer, evaluation)
 
     def _construct_prompt(self, history, current_question, current_answer):
@@ -80,24 +77,17 @@ class InterviewEvaluator:
         prompt += "Evaluation (in Korean):"
         return prompt
 
-    def _save_to_db(self, interview_id, sequence, question, answer, evaluation):
-        try:
-            interview = Interview.objects.get(interview_id=interview_id)
+    def _save_to_db(self, interview_id, question, answer, evaluation):
+        interview = Interview.objects.get(interview_id=interview_id)
 
-            InterviewQuestion.objects.create(
-                question_id=str(uuid.uuid4()),
-                interview=interview,
-                question=question,
-                answer=answer,
-                feedback=evaluation,
-                created_at=timezone.now(),
-            )
+        InterviewQuestion.objects.create(
+            question_id=str(uuid.uuid4()),
+            interview=interview,
+            question=question,
+            answer=answer,
+            feedback=evaluation,
+            created_at=timezone.now(),
+        )
 
-            logger.info(f"[Evaluator] Saved result to DB for {interview_id}")
-
-        except Interview.DoesNotExist:
-            logger.error(f"[Evaluator] Interview {interview_id} not found.")
-        except Exception as e:
-            logger.error(f"[Evaluator] DB Save failed: {e}")
     def get_context(self, interview_id: str):
         return self._context_storage.get(interview_id, [])
