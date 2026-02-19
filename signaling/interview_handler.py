@@ -63,12 +63,16 @@ class InterviewMixin:
         if last_entry.get("role") == "interviewer":
             last_question = last_entry.get("text", "")
 
+        # history 스냅샷: 평가 스레드와의 race condition 방지를 위해 복사본 전달
+        history_snapshot = list(self._interview.history)
+
         answer_submitted.send(
             sender=None,
             interview_id=self.room_id,
             sequence=self._interview.question_count,
             question=last_question,
             answer=user_text,
+            history=history_snapshot,
         )
 
         result = await self._interview.process_answer(user_text)

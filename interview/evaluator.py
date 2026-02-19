@@ -89,6 +89,7 @@ class InterviewEvaluator:
                 interview=interview,
                 question=question,
                 answer=answer,
+                feedback=evaluation,
                 created_at=timezone.now(),
             )
 

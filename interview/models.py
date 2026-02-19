@@ -30,8 +30,8 @@ class InterviewQuestion(models.Model):
     interview = models.ForeignKey(Interview, models.DO_NOTHING)
     question = models.TextField()
     answer = models.TextField(blank=True, null=True)
+    feedback = models.TextField(default='')  # AI 평가 결과 저장
     created_at = models.DateTimeField(blank=True, null=True)
-    # feedback 컬럼은 DB(interview_question)에 없음 — 평가 결과는 메모리(_context_storage)에만 유지
 
     class Meta:
         managed = False
