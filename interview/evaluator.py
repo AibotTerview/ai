@@ -6,7 +6,7 @@ from google import genai
 from django.conf import settings
 from django.utils import timezone
 
-from .models import InterviewQuestion, InterviewScore, Interview
+from .models import InterviewQuestion, Interview
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class InterviewEvaluator:
         api_key = getattr(settings, 'GEMINI_API_KEY', None)
         self.client = genai.Client(api_key=api_key)
 
-    def evaluate(self, interview_id: str, sequence: int, question: str, answer: str):
+    def evaluate(self, interview_id: str, sequence: int, question: str, answer: str, audio_features: dict):
         if interview_id not in self._context_storage:
             self._context_storage[interview_id] = []
 
@@ -50,7 +50,7 @@ class InterviewEvaluator:
 
         history = [entry for entry in self._context_storage.get(interview_id, []) if entry['sequence'] < sequence]
 
-        prompt = self._construct_prompt(history, question, answer)
+        prompt = self._construct_prompt(history, question, answer, audio_features=audio_features)
 
         response = self.client.models.generate_content(
             model='gemini-2.5-flash',
@@ -58,9 +58,9 @@ class InterviewEvaluator:
         )
         evaluation = response.text
         current_entry['evaluation'] = evaluation
-        self._save_to_db(interview_id, sequence ,question, answer, evaluation)
+        self._save_to_db(interview_id, sequence, question, answer, evaluation)
 
-    def _construct_prompt(self, history,current_question, current_answer):
+    def _construct_prompt(self, history, current_question, current_answer, audio_features: dict | None = None):
         instruction = _get_evaluator_prompt_template()
 
         if history:
@@ -74,6 +74,18 @@ class InterviewEvaluator:
         prompt = instruction + "\n\n" + context
         prompt += f"--- Current Question (Criteria) ---\n{current_question}\n\n"
         prompt += f"--- Candidate's Answer (Target) ---\n{current_answer}\n\n"
+
+        duration_sec = audio_features.get("duration_sec") or 0
+        silence_ratio = audio_features.get("silence_ratio")
+        words = len(current_answer.split())
+        wpm = round(words / (duration_sec / 60.0), 1) if duration_sec > 0 else 0
+        silence_pct = round((silence_ratio or 0) * 100, 1)
+        prompt += "--- Audio / Delivery (from voice recording) ---\n"
+        prompt += f"Answer duration: {duration_sec} seconds. "
+        prompt += f"Speaking rate (words per minute): {wpm}. "
+        prompt += f"Silence ratio: {silence_pct}%.\n"
+        prompt += "Consider clarity, pace, and fluency in your evaluation.\n\n"
+
         prompt += "Evaluation (in Korean):"
         return prompt
 
