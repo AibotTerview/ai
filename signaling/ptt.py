@@ -28,7 +28,7 @@ class PTTMixin:
         text = await stt(wav_bytes)
         self.send_dc({"type": "USER_STT", "text": text})
         if self._interview and not self._interview.finished:
-            await self._handle_interview_answer(text)
+            await self._handle_interview_answer(text, wav_bytes=wav_bytes)
 
     def _frames_to_wav(self) -> bytes:
         buf = io.BytesIO()

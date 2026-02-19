@@ -57,7 +57,7 @@ class InterviewMixin:
         })
         await self._speak(result["text"])
 
-    async def _handle_interview_answer(self, user_text: str) -> None:
+    async def _handle_interview_answer(self, user_text: str, wav_bytes: bytes | None = None) -> None:
         last_question = ""
         last_entry = self._interview.history[-1]
         if last_entry.get("role") == "interviewer":
@@ -73,6 +73,7 @@ class InterviewMixin:
             question=last_question,
             answer=user_text,
             history=history_snapshot,
+            wav_bytes=wav_bytes,
         )
 
         result = await self._interview.process_answer(user_text)
