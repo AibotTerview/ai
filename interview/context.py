@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from .models import InterviewSetting
 
@@ -10,7 +10,7 @@ from .models import InterviewSetting
 """
 class LLMContextService:
     @staticmethod
-    def get_setting_context(setting_id: str) -> str:
+    def get_setting_context(setting_id: str, resume_text: Optional[str] = None) -> str:
 
         queryset = InterviewSetting.objects.prefetch_related(
             "settingskill_set__skill",
@@ -33,7 +33,13 @@ class LLMContextService:
         lines.append(f"- interviewer_gender: {setting.interviewer_gender}")
         lines.append(f"- interviewer_appearance: {setting.interviewer_appearance}")
         lines.append(f"- position: {setting.position or '(없음)'}")
-        lines.append(f"- resume_uri: {setting.resume_uri or '(없음)'}")
+        lines.append("")
+
+        lines.append("[Resume]")
+        if resume_text:
+            lines.append(resume_text)
+        else:
+            lines.append("(이력서 없음)")
         lines.append("")
 
         lines.append("[Skill]")

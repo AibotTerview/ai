@@ -9,6 +9,7 @@ from asgiref.sync import sync_to_async
 from interview.personas import PersonaService
 from interview.context import LLMContextService
 from interview.schemas import LLM_RESPONSE_JSON_SCHEMA
+from interview.resume import extract_resume_text
 
 
 class GeminiClient:
@@ -67,7 +68,22 @@ class InterviewSession:
         self._setting_context: str = ""
 
     async def async_setup(self) -> None:
-        self._setting_context = await sync_to_async(LLMContextService.get_setting_context)(self.setting_id)
+        # 1. DB에서 resume_uri 조회 (단일 쿼리)
+        def _get_resume_uri() -> str:
+            from interview.models import InterviewSetting
+            setting = InterviewSetting.objects.get(setting_id=self.setting_id)
+            return setting.resume_uri or ""
+
+        resume_uri = await sync_to_async(_get_resume_uri)()
+
+        # 2. HTTPS 다운로드 + PDF 파싱 (블로킹 I/O → 스레드풀)
+        loop = asyncio.get_event_loop()
+        resume_text = await loop.run_in_executor(None, extract_resume_text, resume_uri)
+
+        # 3. 전체 LLM 컨텍스트 빌드
+        self._setting_context = await sync_to_async(
+            LLMContextService.get_setting_context
+        )(self.setting_id, resume_text=resume_text)
 
     def add_question(self, text: str) -> None:
         self.history.append({"role": "interviewer", "text": text})
