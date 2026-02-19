@@ -29,10 +29,26 @@ class PTTMixin:
         asyncio.ensure_future(self._process_stt(wav_bytes))
 
     async def _process_stt(self, wav_bytes: bytes) -> None:
-        text = await stt_transcribe(wav_bytes)
+        # WAV 헤더(44 bytes) 제외한 실제 PCM 데이터 길이로 최소 녹음 시간 확인
+        # sample_rate * channels * bit_depth(2 bytes) * 최소 0.15초
+        min_bytes = int(self._audio_sample_rate * self._audio_channels * 2 * 0.15)
+        pcm_size = len(wav_bytes) - 44  # WAV 헤더 크기
+        if pcm_size < min_bytes:
+            self.send_dc({"type": "PTT_TOO_SHORT"})
+            return
+
+        try:
+            text = await stt_transcribe(wav_bytes)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"[PTT] STT failed: {e}")
+            self.send_dc({"type": "PTT_TOO_SHORT"})
+            return
+
         self.send_dc({"type": "USER_STT", "text": text})
         if self._interview and not self._interview.finished:
             await self._handle_interview_answer(text)
+
 
     def _frames_to_wav(self) -> bytes:
         buf = io.BytesIO()

@@ -10,9 +10,6 @@ logger = logging.getLogger(__name__)
 class InterviewEvaluator:
     _instance = None
 
-    # In-memory context storage: { interview_id: [ (sequence, question, answer, evaluation), ... ] }
-    _context_storage = {}
-
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(InterviewEvaluator, cls).__new__(cls)
@@ -27,40 +24,23 @@ class InterviewEvaluator:
             logger.warning("[Evaluator] GEMINI_API_KEY not found. AI features will be disabled.")
             self.client = None
 
-    def evaluate(self, interview_id: str, sequence: int, question: str, answer: str):
+    def evaluate(self, interview_id: str, sequence: int, question: str, answer: str, history: list = []):
         """
         Evaluates the answer using Gemini, considering the context of previous Q&A.
+        history: snapshot of InterviewSession.history at the time of answer submission (thread-safe copy).
         """
         if not self.client:
             logger.error("[Evaluator] Client not initialized. Skipping evaluation.")
             return
 
-        # 0. Initialize Context if needed
-        if interview_id not in self._context_storage:
-            self._context_storage[interview_id] = []
+        # 현재 답변 이전의 Q&A만 context로 사용 (interviewer 역할 항목을 question으로, user 역할 항목을 answer로 매핑)
+        prior_qa = self._extract_prior_qa(history, question)
 
-        # 1. Pre-save to Memory (Mark as Pending) to avoid Race Condition
-        # We store a mutable dictionary so we can update it later.
-        current_entry = {
-            'sequence': sequence,
-            'question': question,
-            'answer': answer,
-            'evaluation': "평가 진행 중..." # Pending status
-        }
-        self._context_storage[interview_id].append(current_entry)
-
-        # 2. Retrieve Context (excluding current one for prompt construction)
-        # We filter out the current sequence to avoid self-reference in prompt if needed,
-        # but logically previous items are what matters.
-        history = [entry for entry in self._context_storage.get(interview_id, []) if entry['sequence'] < sequence]
-
-        # 3. Construct Prompt
-        prompt = self._construct_prompt(history, question, answer)
+        # Construct prompt using prior Q&A context
+        prompt = self._construct_prompt(prior_qa, question, answer)
 
         evaluation = "평가 실패 (API Error)"
         try:
-            # 4. Call Gemini API
-            # Trying 'gemini-2.5-flash' (Standard Free Tier model)
             response = self.client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=prompt
@@ -72,13 +52,31 @@ class InterviewEvaluator:
             logger.error(f"[Evaluator] API Call failed: {e}")
             evaluation = f"AI 평가를 불러올 수 없습니다. 원인: {str(e)}"
 
-        # 5. Update Memory (In-Place Update)
-        current_entry['evaluation'] = evaluation
-
-        # 6. Save to DB - Always save Q&A
+        # Save to DB
         self._save_to_db(interview_id, sequence, question, answer, evaluation)
 
-    def _construct_prompt(self, history, current_question, current_answer):
+    def _extract_prior_qa(self, history: list, current_question: str) -> list:
+        """
+        InterviewSession.history의 스냅샷에서 이전 Q&A 쌍을 추출.
+        현재 질문 직전까지의 (question, answer) 쌍을 리스트로 반환.
+        """
+        prior_qa = []
+        i = 0
+        while i < len(history) - 1:
+            entry = history[i]
+            next_entry = history[i + 1]
+            if entry.get("role") == "interviewer" and next_entry.get("role") == "user":
+                q_text = entry.get("text", "")
+                a_text = next_entry.get("text", "")
+                # 현재 평가 대상 질문은 제외
+                if q_text != current_question:
+                    prior_qa.append({"question": q_text, "answer": a_text})
+                i += 2
+            else:
+                i += 1
+        return prior_qa
+
+    def _construct_prompt(self, prior_qa: list, current_question: str, current_answer: str) -> str:
         prompt = "You are an AI Interviewer Evaluator. Your task is to evaluate the candidate's answer.\n"
         prompt += "The 'Question' provided is the context or the problem given to the candidate.\n"
         prompt += "The 'Answer' is the candidate's response which you must evaluate.\n"
@@ -88,10 +86,9 @@ class InterviewEvaluator:
         prompt += "2. Check for CONSISTENCY with previous answers (Context). Point out any contradictions.\n"
         prompt += "IMPORTANT: You MUST provide the evaluation feedback entirely in Korean (한국어).\n\n"
 
-        if history:
+        if prior_qa:
             prompt += "--- Previous Conversation (Context) ---\n"
-            # We only provide the Q&A history to check consistency, NOT the previous evaluations.
-            for entry in history:
+            for entry in prior_qa:
                 prompt += f"Q: {entry['question']}\nA: {entry['answer']}\n\n"
 
         prompt += f"--- Current Question (Criteria) ---\n{current_question}\n\n"
@@ -103,12 +100,12 @@ class InterviewEvaluator:
         try:
             interview = Interview.objects.get(interview_id=interview_id)
 
-            # Save Question & Answer (DB 테이블에 feedback 컬럼 없음 — 평가는 _context_storage에만 유지)
             InterviewQuestion.objects.create(
                 question_id=str(uuid.uuid4()),
                 interview=interview,
                 question=question,
                 answer=answer,
+                feedback=evaluation,
                 created_at=timezone.now(),
             )
 
@@ -118,9 +115,3 @@ class InterviewEvaluator:
             logger.error(f"[Evaluator] Interview {interview_id} not found.")
         except Exception as e:
             logger.error(f"[Evaluator] DB Save failed: {e}")
-    def get_context(self, interview_id: str):
-        """
-        Returns the conversation history for a specific interview.
-        This can be called from the main thread (Interviewer AI).
-        """
-        return self._context_storage.get(interview_id, [])

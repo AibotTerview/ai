@@ -24,10 +24,9 @@ def notify(request):
 
     setting = InterviewSetting.objects.get(setting_id=setting_id)
 
-    Interview.objects.create(
+    Interview.objects.get_or_create(
         interview_id=room_id,
-        setting=setting,
-        created_at=timezone.now(),
+        defaults={"setting": setting, "created_at": timezone.now()},
     )
 
     if signaling_start(room_id):
