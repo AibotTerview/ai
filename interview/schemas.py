@@ -1,5 +1,3 @@
-"""LLM JSON 응답 스키마 (Gemini response_schema용)."""
-
 LLM_RESPONSE_JSON_SCHEMA = {
     "type": "object",
     "properties": {
