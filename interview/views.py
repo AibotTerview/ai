@@ -24,6 +24,10 @@ def notify(request):
 
     setting = InterviewSetting.objects.get(setting_id=setting_id)
 
+    from signaling.session import get_session, remove_session
+    if get_session(room_id) is not None:
+        remove_session(room_id)
+
     Interview.objects.get_or_create(
         interview_id=room_id,
         defaults={"setting": setting, "created_at": timezone.now()},

@@ -16,7 +16,7 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         self.room_id = room_id
         self.stomp_ws = stomp_ws
         self.peer = RTCPeerConnection()
-        self.peer.on("track", self._on_track)
+        self.peer.on("track", lambda track: asyncio.ensure_future(self._on_track(track)))
         self.peer.on("connectionstatechange", self._on_connection_state_change)
         self.peer.on("datachannel", self._on_datachannel)
 
@@ -47,7 +47,8 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         while True:
             try:
                 frame = await track.recv()
-            except Exception:
+            except Exception as e:
+                logger.debug("Track ended: %s", e)
                 break
             self._audio_sample_rate = frame.sample_rate
             self._audio_channels = len(frame.layout.channels)
@@ -63,6 +64,8 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
                     self._audio_buffer_size += len(raw)
 
     def _on_connection_state_change(self) -> None:
+        if self.peer is None:
+            return
         state = self.peer.connectionState
         if state == "connected":
             asyncio.ensure_future(self.stomp_ws.close())
