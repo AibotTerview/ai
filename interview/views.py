@@ -24,9 +24,9 @@ def notify(request):
 
     setting = InterviewSetting.objects.get(setting_id=setting_id)
 
-    from signaling.session import get_session
+    from signaling.session import get_session, remove_session
     if get_session(room_id) is not None:
-        return JsonResponse({"error": "이미 진행 중인 인터뷰입니다."}, status=409)
+        remove_session(room_id)
 
     Interview.objects.get_or_create(
         interview_id=room_id,

@@ -55,6 +55,10 @@ async def _session(room_id: str) -> None:
             payload: dict | None = data.get("payload")
 
             if msg_type == "WEBRTC_OFFER":
+                with _sessions_lock:
+                    old_session = _sessions.pop(room_id, None)
+                if old_session:
+                    old_session.cleanup()
                 session = WebRTCSession(room_id, ws)
                 with _sessions_lock:
                     _sessions[room_id] = session
