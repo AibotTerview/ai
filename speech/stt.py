@@ -6,7 +6,6 @@ from django.conf import settings
 
 _client: OpenAI | None = None
 
-
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
@@ -26,6 +25,6 @@ def _transcribe_sync(wav_bytes: bytes) -> str:
     return response.text
 
 
-async def transcribe(wav_bytes: bytes) -> str:
+async def stt(wav_bytes: bytes) -> str:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, partial(_transcribe_sync, wav_bytes))

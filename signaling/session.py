@@ -61,10 +61,8 @@ async def _session(room_id: str) -> None:
                 await session.handle_offer(payload)
             elif msg_type == "ICE_CANDIDATE" and session:
                 await session.handle_ice(payload)
-
     if session:
         await session.closed.wait()
-
 
 def active_session_count() -> int:
     with _sessions_lock:

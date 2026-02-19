@@ -62,7 +62,7 @@ def _synthesize_sync(text: str, gender: str) -> bytes:
 
     return pcm_bytes
 
-async def synthesize(text: str, gender: str) -> bytes:
+async def tts(text: str, gender: str) -> bytes:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None, partial(_synthesize_sync, text, gender)

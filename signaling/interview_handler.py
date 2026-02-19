@@ -3,7 +3,7 @@ import asyncio
 from asgiref.sync import sync_to_async
 from interview.interviewer import InterviewSession
 from interview.models import InterviewSetting
-from speech.tts import synthesize
+from speech.tts import tts
 from interview.signals import answer_submitted
 
 INTERVIEW_MAX_DURATION = 30 * 60 # 30분
@@ -86,7 +86,7 @@ class InterviewMixin:
         await self._speak(result["text"])
 
     async def _speak(self, text: str):
-        pcm_bytes = await synthesize(text, gender=self._gender)
+        pcm_bytes = await tts(text, gender=self._gender)
         await self._tts_track.play(pcm_bytes)
         self.send_dc({"type": "AI_DONE"})
         self._reset_ptt_timeout()

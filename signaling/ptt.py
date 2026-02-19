@@ -2,7 +2,7 @@ import io
 import wave
 import asyncio
 
-from speech.stt import transcribe as stt_transcribe
+from speech.stt import stt as stt_transcribe
 
 MAX_AUDIO_BUFFER_BYTES = 18 * 1024 * 1024
 PTT_MAX_RECORDING_DURATION = 3 * 60
