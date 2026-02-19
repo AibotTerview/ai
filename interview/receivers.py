@@ -10,12 +10,13 @@ logger = logging.getLogger(__name__)
 def handle_answer_submission(sender, **kwargs):
     """
     Handles the answer_submitted signal asynchronously using a thread.
-    Required kwargs: interview_id, sequence, question, answer
+    Required kwargs: interview_id, sequence, question, answer, history
     """
     interview_id = kwargs.get('interview_id')
     sequence = kwargs.get('sequence')
     question = kwargs.get('question')
     answer = kwargs.get('answer')
+    history = kwargs.get('history', [])
 
     if not all([interview_id, question, answer]):
         logger.warning("[Signal] Missing arguments for answer_submitted signal.")
@@ -26,14 +27,15 @@ def handle_answer_submission(sender, **kwargs):
     # Run evaluation in a separate thread to avoid blocking the main thread
     evaluator_thread = threading.Thread(
         target=_run_async_evaluation,
-        args=(interview_id, sequence, question, answer),
+        args=(interview_id, sequence, question, answer, history),
         daemon=True
     )
     evaluator_thread.start()
 
-def _run_async_evaluation(interview_id, sequence, question, answer):
+def _run_async_evaluation(interview_id, sequence, question, answer, history):
     try:
         evaluator = InterviewEvaluator()
-        evaluator.evaluate(interview_id, sequence, question, answer)
+        evaluator.evaluate(interview_id, sequence, question, answer, history)
     except Exception as e:
         logger.error(f"[Signal] Async evaluation failed: {e}")
+
