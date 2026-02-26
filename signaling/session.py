@@ -46,6 +46,12 @@ async def _session(room_id: str) -> None:
         await stomp.subscribe(ws, f"/topic/webrtc/offer/{room_id}", "sub-offer")
         await stomp.subscribe(ws, f"/topic/webrtc/ice/{room_id}", "sub-ice")
 
+        # 구독 완료를 프론트엔드에 알림
+        await stomp.send(ws, "/app/signal/ready", {
+            "type": "AI_READY",
+            "roomId": room_id,
+        })
+
         async for raw in ws:
             data = stomp.parse_body(raw)
             if not data:
