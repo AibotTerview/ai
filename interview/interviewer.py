@@ -108,7 +108,7 @@ class InterviewSession:
     async def generate_first_question(self) -> Dict:
         system_prompt = self._build_system_prompt()
         messages: List[Dict[str, str]] = [
-            {"role": "user", "text": "첫 번째 면접 질문을 생성해주세요.\n\n현재 질문 순서: 1번째"}
+            {"role": "user", "text": "첫 번째 면접 질문을 생성해주세요. 반드시 지원자에게 간단한 자기소개를 요청하는 것으로 시작하세요.\n\n현재 질문 순서: 1번째"}
         ]
         data = await call_gemini_json(system_prompt, messages)
         result = self._json_to_result(data, finished=False)
