@@ -168,7 +168,7 @@ class InterviewSession:
         if is_followup:
             # 꼬리질문: question_count도 증가, followup_count도 증가
             self.followup_count += 1
-            result["text"] = f"[꼬리질문] {result['text']}"
+            # 꼬리질문 접두사 없이 자연스럽게 전달
             self.history.append({"role": "interviewer", "text": result["text"]})
             self.question_count += 1
         else:
