@@ -1,9 +1,35 @@
+import json
 import logging
 import uuid
 from google import genai
+from google.genai import types as genai_types
 from django.conf import settings
 from django.utils import timezone
 from .models import InterviewQuestion, InterviewScore, Interview
+
+SCORE_TYPES = ['OVERALL', 'RESPONSE_ACCURACY', 'SPEAKING_PACE', 'VOCABULARY_QUALITY', 'PRONUNCIATION_ACCURACY']
+
+_SCORE_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "score": {"type": "integer"},
+        "evaluation": {"type": "string"},
+    },
+    "required": ["score", "evaluation"],
+}
+
+OVERALL_REVIEW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "overall_review": {"type": "string"},
+        "scores": {
+            "type": "object",
+            "properties": {st: _SCORE_ITEM_SCHEMA for st in SCORE_TYPES},
+            "required": SCORE_TYPES,
+        },
+    },
+    "required": ["overall_review", "scores"],
+}
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +131,8 @@ class InterviewEvaluator:
                 interview=interview,
                 question=question,
                 answer=answer,
+                sequence=sequence,
+                elapsed_time=0,
                 feedback=evaluation,
                 created_at=timezone.now(),
             )
@@ -118,8 +146,8 @@ class InterviewEvaluator:
 
     def generate_overall_review(self, interview_id: str, duration: int):
         """
-        면접 종료 시 전체 Q&A + 개별 피드백을 종합해 최종 AI 평가를 생성하고 DB에 저장.
-        duration: 면접 진행 시간 (초 단위)
+        면접 종료 시 전체 Q&A + 개별 피드백을 종합해 최종 AI 평가 및 점수를 생성하고 DB에 저장.
+        duration: 면접 진행 시간 (초 단위) — DB에는 밀리초로 변환해 저장
         """
         if not self.client:
             logger.error("[Evaluator] Client not initialized. Skipping overall review.")
@@ -134,31 +162,48 @@ class InterviewEvaluator:
         questions = InterviewQuestion.objects.filter(interview=interview).order_by('created_at')
 
         if not questions.exists():
-            logger.warning(f"[Evaluator] No questions found for interview {interview_id}. Skipping overall review.")
-            # duration만 저장
-            interview.duration = duration
+            logger.warning(f"[Evaluator] No questions for {interview_id}. Saving duration only.")
+            interview.duration = duration * 1000
             interview.save(update_fields=['duration'])
             return
 
         prompt = self._construct_overall_prompt(questions)
 
-        overall_review = "전체 평가 생성 실패 (API Error)"
+        result = None
         try:
             response = self.client.models.generate_content(
                 model='gemini-2.5-flash',
-                contents=prompt
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=OVERALL_REVIEW_SCHEMA,
+                ),
             )
-            overall_review = response.text
+            result = json.loads(response.text)
             logger.info(f"[Evaluator] Overall review generated for {interview_id}")
         except Exception as e:
             logger.error(f"[Evaluator] Overall review API call failed: {e}")
-            overall_review = f"AI 전체 평가를 불러올 수 없습니다. 원인: {str(e)}"
 
         try:
-            interview.duration = duration
-            interview.ai_overall_review = overall_review
+            interview.duration = duration * 1000  # 초 → 밀리초
+            interview.ai_overall_review = (result or {}).get("overall_review", "AI 전체 평가를 생성하지 못했습니다.")
             interview.save(update_fields=['duration', 'ai_overall_review'])
-            logger.info(f"[Evaluator] Overall review saved for {interview_id} (duration={duration}s)")
+
+            if result:
+                scores_data = result.get("scores", {})
+                for score_type in SCORE_TYPES:
+                    score_item = scores_data.get(score_type, {})
+                    score_val = score_item.get("score")
+                    if score_val is not None:
+                        InterviewScore.objects.create(
+                            score_id=str(uuid.uuid4()),
+                            interview=interview,
+                            score_type=score_type,
+                            score=int(score_val),
+                            evaludation=score_item.get("evaluation", ""),
+                        )
+
+            logger.info(f"[Evaluator] Overall review & scores saved for {interview_id} (duration={duration}s)")
         except Exception as e:
             logger.error(f"[Evaluator] Overall review DB save failed: {e}")
 
@@ -167,14 +212,16 @@ class InterviewEvaluator:
             "You are an expert technical interviewer and evaluator.\n"
             "Below is the complete record of a job interview, including each question, "
             "the candidate's answer, and the immediate AI feedback given at the time.\n"
-            "Based on ALL of this information, write a comprehensive final evaluation of the candidate.\n\n"
-            "Your evaluation should cover:\n"
-            "1. 전반적인 답변 품질 (논리성, 구체성, 명확성)\n"
-            "2. 기술적 역량 및 지식 수준\n"
-            "3. 일관성 및 태도\n"
-            "4. 강점과 개선이 필요한 점\n"
-            "5. 종합 의견\n\n"
-            "IMPORTANT: Write the entire evaluation in Korean (한국어).\n\n"
+            "Based on ALL of this information, produce a JSON response with:\n\n"
+            "1. overall_review: 종합 최종 평가 텍스트 (한국어, 500자 이내)\n"
+            "   - 전반적인 답변 품질, 기술적 역량, 강점, 개선점을 포함\n\n"
+            "2. scores: 아래 5개 항목에 대해 각각 0~100 정수 점수와 한국어 평가 한 줄 작성\n"
+            "   - OVERALL: 전체 종합 점수\n"
+            "   - RESPONSE_ACCURACY: 질문에 대한 답변의 정확성·관련성\n"
+            "   - SPEAKING_PACE: 답변의 명료함·간결함 (음성 속도 대신 텍스트 답변 기준)\n"
+            "   - VOCABULARY_QUALITY: 어휘 수준 및 전문 용어 활용도\n"
+            "   - PRONUNCIATION_ACCURACY: 답변의 표현 정확성 및 일관성\n\n"
+            "IMPORTANT: All text fields must be in Korean (한국어).\n\n"
             "--- Interview Record ---\n\n"
         )
 
@@ -184,5 +231,4 @@ class InterviewEvaluator:
             prompt += f"답변: {q.answer or '(답변 없음)'}\n"
             prompt += f"개별 피드백: {q.feedback or '(피드백 없음)'}\n\n"
 
-        prompt += "--- 종합 최종 평가 (한국어로 작성) ---\n"
         return prompt

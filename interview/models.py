@@ -30,6 +30,8 @@ class InterviewQuestion(models.Model):
     interview = models.ForeignKey(Interview, models.DO_NOTHING)
     question = models.TextField()
     answer = models.TextField(blank=True, null=True)
+    sequence = models.IntegerField(default=0)
+    elapsed_time = models.BigIntegerField(default=0)
     feedback = models.TextField(default='')  # AI 평가 결과 저장
     created_at = models.DateTimeField(blank=True, null=True)
 

@@ -31,6 +31,7 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         self._interview = None
         self._tts_track = TTSAudioTrack()
         self._gender = "male"
+        self._recorder = None
 
         self._remote_desc_set = False
         self._pending_remote_ice: list[dict] = []
@@ -42,6 +43,19 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         self.closed = asyncio.Event()
 
     async def _on_track(self, track: MediaStreamTrack) -> None:
+        if track.kind == "video":
+            while True:
+                try:
+                    frame = await track.recv()
+                except Exception:
+                    break
+                if self._recorder:
+                    try:
+                        self._recorder.push_video(frame)
+                    except Exception as e:
+                        logger.warning("[Recorder] push_video 실패 (스킵): %s", e)
+            return
+
         if track.kind != "audio":
             return
         while True:
@@ -108,7 +122,7 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         candidate.sdpMLineIndex = payload.get("sdpMLineIndex")
         await self.peer.addIceCandidate(candidate)
 
-    def cleanup(self) -> None:
+    async def cleanup(self) -> None:
         if self._interview_timer:
             self._interview_timer.cancel()
         if self._ptt_timeout_timer:
@@ -117,6 +131,12 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
         self._ptt_active = False
         self._audio_frames.clear()
         self._interview = None
+
+        if self._recorder:
+            s3_url = self._recorder.stop()
+            if s3_url:
+                await self._save_material(s3_url)
+            self._recorder = None
 
         if self._tts_track:
             self._tts_track.stop()
@@ -127,10 +147,28 @@ class WebRTCSession(DataChannelMixin, PTTMixin, InterviewMixin):
             self._dc = None
 
         if self.peer:
-            asyncio.ensure_future(self.peer.close())
+            await self.peer.close()
             self.peer = None
 
         self.closed.set()
+
+    async def _save_material(self, s3_url: str) -> None:
+        import uuid
+        from django.utils import timezone
+        from asgiref.sync import sync_to_async
+        from interview.models import InterviewMaterial, Interview
+        try:
+            interview = await sync_to_async(Interview.objects.get)(setting_id=self.room_id)
+            await sync_to_async(InterviewMaterial.objects.create)(
+                material_id=str(uuid.uuid4()),
+                interview=interview,
+                material_type="VIDEO",
+                file_path=s3_url,
+                created_at=timezone.now(),
+            )
+            logger.info("[Recorder] InterviewMaterial 저장 완료: %s", s3_url)
+        except Exception as e:
+            logger.error("[Recorder] InterviewMaterial 저장 실패: %s", e)
 
 
 def _parse_candidate(candidate_str: str) -> RTCIceCandidate:

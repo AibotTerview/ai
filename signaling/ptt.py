@@ -26,6 +26,9 @@ class PTTMixin:
         wav_bytes = self._frames_to_wav()
         self._audio_frames.clear()
         self._audio_buffer_size = 0
+        if self._recorder:
+            # WAV 헤더(44바이트) 제거 후 raw PCM 전달
+            self._recorder.push_audio_pcm(wav_bytes[44:], self._audio_sample_rate)
         asyncio.ensure_future(self._process_stt(wav_bytes))
 
     async def _process_stt(self, wav_bytes: bytes) -> None:

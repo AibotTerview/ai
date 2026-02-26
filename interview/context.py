@@ -33,7 +33,6 @@ class LLMContextService:
         lines.append(f"- interviewer_gender: {setting.interviewer_gender}")
         lines.append(f"- interviewer_appearance: {setting.interviewer_appearance}")
         lines.append(f"- position: {setting.position or '(없음)'}")
-        lines.append(f"- resume_uri: {setting.resume_uri or '(없음)'}")
         lines.append("")
 
         lines.append("[Skill]")
@@ -47,4 +46,14 @@ class LLMContextService:
             lines.append(f"A: {pre_question.answer}")
             lines.append("")
 
+        # 이력서/포트폴리오 PDF 텍스트 추출
+        if setting.resume_uri:
+            from storage.pdf import extract_text_from_s3
+            resume_text = extract_text_from_s3(setting.resume_uri)
+            if resume_text:
+                lines.append("[Resume]")
+                lines.append(resume_text)
+                lines.append("")
+
         return "\n".join(lines).strip()
+

@@ -58,7 +58,7 @@ async def _session(room_id: str) -> None:
                 with _sessions_lock:
                     old_session = _sessions.pop(room_id, None)
                 if old_session:
-                    old_session.cleanup()
+                    await old_session.cleanup()
                 session = WebRTCSession(room_id, ws)
                 with _sessions_lock:
                     _sessions[room_id] = session
@@ -84,4 +84,4 @@ def remove_session(room_id: str) -> None:
     with _sessions_lock:
         session = _sessions.pop(room_id, None)
     if session:
-        session.cleanup()
+        asyncio.ensure_future(session.cleanup())

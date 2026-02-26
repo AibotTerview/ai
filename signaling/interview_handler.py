@@ -67,6 +67,21 @@ class InterviewMixin:
         # 면접 시작 시각 기록
         self._interview_start_time = time.time()
 
+        # Interview 레코드 생성 (없으면 생성, 있으면 무시)
+        from django.utils import timezone
+        from interview.models import Interview
+        await sync_to_async(Interview.objects.get_or_create)(
+            setting=setting,
+            defaults={
+                'interview_id': self.room_id,
+                'created_at': timezone.now(),
+            }
+        )
+
+        from speech.recorder import InterviewRecorder
+        self._recorder = InterviewRecorder(self.room_id)
+        self._recorder.start()
+
         result = await self._interview.generate_first_question()
 
         await self.send_dc_async({
@@ -101,6 +116,13 @@ class InterviewMixin:
         if result["finished"]:
             self.send_dc({"type": "INTERVIEW_END", "text": result["text"], "expression": result["expression"]})
             self._fire_interview_ended()
+            await self._speak(result["text"])
+            # PTT 타임아웃 타이머 취소 (클로징 이후 오발송 방지)
+            if self._ptt_timeout_timer:
+                self._ptt_timeout_timer.cancel()
+                self._ptt_timeout_timer = None
+            # 클로징 TTS가 프론트에 전달될 시간 확보 후 세션 종료
+            asyncio.get_event_loop().call_later(1.0, self._deferred_remove_session)
         else:
             self.send_dc({
                 "type": "AI_QUESTION",
@@ -109,10 +131,16 @@ class InterviewMixin:
                 "questionNumber": self._interview.question_count,
                 "totalQuestions": self._interview.max_questions,
             })
-        await self._speak(result["text"])
+            await self._speak(result["text"])
+
+    def _deferred_remove_session(self) -> None:
+        from signaling.session import remove_session
+        remove_session(self.room_id)
 
     async def _speak(self, text: str) -> None:
         pcm_bytes = await tts_synthesize(text, gender=self._gender)
+        if self._recorder:
+            self._recorder.push_audio_pcm(pcm_bytes)
         await self._tts_track.play(pcm_bytes)
         self.send_dc({"type": "AI_DONE"})
         self._reset_ptt_timeout()
